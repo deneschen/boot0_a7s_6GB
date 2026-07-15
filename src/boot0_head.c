@@ -61,7 +61,7 @@ const boot0_file_head_t  BT0_head = {
 				0x0f0f0f0f,	/* dram_dx_dri */
 				0xec030e0f,	/* dram_ca_dri */
 				0,
-				0xa0fa,
+				0xa10a,		/* CXMT 6GB topology */
 				0x1001,
 				0,
 				0,
@@ -85,7 +85,7 @@ const boot0_file_head_t  BT0_head = {
 				0x325f0000,
 				0,
 				0,
-				0x65,
+				0x10065,	/* 6GB density/topology flag */
 				0,
 			},
 			/*__s32	uart_port;*/
