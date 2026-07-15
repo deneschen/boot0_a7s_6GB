@@ -29,7 +29,7 @@ A7S_DRAM_PARA = [
     0x0F0F0F0F,
     0xEC030E0F,
     0,
-    0xA0FA,
+    0xA10A,
     0x1001,
     0,
     0,
@@ -53,7 +53,7 @@ A7S_DRAM_PARA = [
     0x325F0000,
     0,
     0,
-    0x65,
+    0x10065,
     0,
 ]
 
@@ -151,7 +151,7 @@ def validate_image(image: Path) -> None:
 
     dram_para = u32_array(buf, DRAM_PARA_OFF, 32)
     if dram_para != A7S_DRAM_PARA:
-        fail("DRAM parameters do not match the confirmed A7S LPDDR5 2400 configuration")
+        fail("DRAM parameters do not match the confirmed A7S 6GB LPDDR5 2400 configuration")
 
     if u32(buf, UART_PORT_OFF) != EXPECTED_UART_PORT:
         fail(f"UART port is {u32(buf, UART_PORT_OFF)}, expected {EXPECTED_UART_PORT}")
