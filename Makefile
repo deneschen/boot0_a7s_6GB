@@ -84,7 +84,7 @@ OBJS := $(BUILD)/boot0_entry.o \
 #                    before board_sdcard.o so its init_DRAM() wins over the
 #                    small FPGA/bring-up routine in board_sdcard.o.
 BLOBS := $(TOP)/blobs/libdram.o \
-         $(TOP)/blobs/board_sdcard.o
+         $(BUILD)/board_sdcard.o
 
 LDS_IN  := $(TOP)/arch/armv7/boot0.lds
 LDS_OUT := $(BUILD)/boot0.lds
@@ -109,6 +109,11 @@ $(BUILD)/early_uart.o: $(TOP)/src/early_uart.c | $(BUILD)
 
 $(BUILD)/platform_shims.o: $(TOP)/src/platform_shims.c | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
+
+# Export the blob's local MMC device table so the real-silicon registration
+# shim can preserve the vendor bookkeeping while applying the card0 pin setup.
+$(BUILD)/board_sdcard.o: $(TOP)/blobs/board_sdcard.o | $(BUILD)
+	$(OBJCOPY) --globalize-symbol=mmc_devices $< $@
 
 # ---- preprocess linker script (mirrors nboot/Makefile boot0.lds rule) -------
 $(LDS_OUT): $(LDS_IN) | $(BUILD)

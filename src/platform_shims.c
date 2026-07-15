@@ -20,11 +20,17 @@
 #define A7S_R_PIO_DRV_BASE	0x14
 #define A7S_R_PIO_PULL_BASE	0x24
 
+#define A7S_MMC0_PF_CFG		(SUNXI_PIO_BASE + 0x300)
+#define A7S_MMC0_PF_DRV		(SUNXI_PIO_BASE + 0x320)
+#define A7S_MMC0_PF_PULL		(SUNXI_PIO_BASE + 0x330)
+
 #define AXP8191_DEVICE_ADDR	400000
 #define AXP8191_RUNTIME_ADDR	0x36
 #define AXP8191_CHIP_ID		0x0e
 #define AXP8191_CHIP_ID_A	0x03
 #define AXP8191_DCDC_CTRL1	0x10
+#define AXP8191_DCDC_CTRL2	0x11
+#define AXP8191_DC1SW2_ENABLE	(1U << 4)
 #define AXP8191_DCDC6_VOL	0x17
 #define AXP8191_DCDC7_VOL	0x18
 #define AXP8191_DCDC8_VOL	0x19
@@ -72,6 +78,9 @@ int pmic_bus_read(u8 runtime_addr, u8 reg, u8 *value);
 int pmic_bus_write(u8 runtime_addr, u8 reg, u8 value);
 
 static int a7s_axp8191_ready;
+
+extern void *mmc_devices[];
+int mmc_init(void *mmc);
 
 static void a7s_gpio_registers(unsigned int port, unsigned int pin,
 		unsigned long *cfg, unsigned long *pull, unsigned long *drv,
@@ -211,6 +220,21 @@ static int a7s_axp8191_init(void)
 	return 0;
 }
 
+static int a7s_axp8191_enable_sd_power(void)
+{
+	int status;
+
+	status = a7s_axp8191_update_bits(AXP8191_DCDC_CTRL2,
+					     AXP8191_DC1SW2_ENABLE,
+					     AXP8191_DC1SW2_ENABLE);
+	if (status) {
+		printf("A7S PMU: enable SD power dc1sw2 failed\n");
+		return status;
+	}
+
+	return 0;
+}
+
 static const struct a7s_axp8191_rail *a7s_axp8191_find_rail(const char *name)
 {
 	u32 index;
@@ -270,7 +294,6 @@ static u8 a7s_axp8191_voltage_code(const struct a7s_axp8191_rail *rail,
 static int a7s_axp8191_set_rail(const char *name, int set_vol, int onoff)
 {
 	const struct a7s_axp8191_rail *rail = a7s_axp8191_find_rail(name);
-	int status;
 	u8 code;
 
 	if (!rail) {
@@ -290,13 +313,9 @@ static int a7s_axp8191_set_rail(const char *name, int set_vol, int onoff)
 	if (onoff < 0)
 		return 0;
 
-	status = a7s_axp8191_update_bits(rail->enable_reg,
+	return a7s_axp8191_update_bits(rail->enable_reg,
 					 1U << rail->enable_bit,
 					 onoff ? 1U << rail->enable_bit : 0);
-	if (!status && onoff && set_vol > 0)
-		printf("A7S PMU: request %s=%d mV on\n", name, set_vol);
-
-	return status;
 }
 
 int sunxi_board_init(void)
@@ -305,7 +324,10 @@ int sunxi_board_init(void)
 
 	/* Preserve the SoC setup performed by the supplied FPGA board object. */
 	writel(value | 1U, 0x08020000);
-	return a7s_axp8191_init();
+	if (a7s_axp8191_init())
+		return -1;
+
+	return a7s_axp8191_enable_sd_power();
 }
 
 int set_ddr_voltage_ext(char *name, int set_vol, int onoff)
@@ -315,4 +337,36 @@ int set_ddr_voltage_ext(char *name, int set_vol, int onoff)
 
 void sunxi_smc_en_with_glitch_workaround(void)
 {
+}
+
+static void a7s_mmc0_config_pins(void)
+{
+	u32 value;
+
+	/* PF0-PF5 are SDC0; PF2 (CLK) uses the stronger board-DTS setting. */
+	value = readl(A7S_MMC0_PF_CFG);
+	value = (value & ~0x00ffffffU) | 0x00222222U;
+	writel(value, A7S_MMC0_PF_CFG);
+
+	value = readl(A7S_MMC0_PF_DRV);
+	value = (value & ~0x00ffffffU) | 0x00111211U;
+	writel(value, A7S_MMC0_PF_DRV);
+
+	value = readl(A7S_MMC0_PF_PULL);
+	value = (value & ~0x00000fffU) | 0x00000555U;
+	writel(value, A7S_MMC0_PF_PULL);
+}
+
+int mmc_register(int sdc_no, void *mmc)
+{
+	u32 *timeout = (u32 *)((char *)mmc + 0xe8);
+
+	mmc_devices[sdc_no] = mmc;
+	if (!*timeout)
+		*timeout = 0xffff;
+
+	if (sdc_no == 0)
+		a7s_mmc0_config_pins();
+
+	return mmc_init(mmc);
 }

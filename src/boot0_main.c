@@ -45,12 +45,10 @@ void main(void)
 
 	a7s_early_uart_init();
 	a7s_early_uart_puts("\r\nA7S BOOT0: early uart0 alive\r\n");
-	a7s_early_uart_puts("A7S BOOT0: uart0 pins PB9/PB10\r\n");
 
 	sunxi_board_init_early();
 	sunxi_serial_init(BT0_head.prvt_head.uart_port, (void *)BT0_head.prvt_head.uart_ctrl, 2);
 	a7s_early_uart_init();
-	a7s_early_uart_puts("A7S BOOT0: vendor serial ready\r\n");
 	print_commit_log();
 
 	status = sunxi_board_init();
