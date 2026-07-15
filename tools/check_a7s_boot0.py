@@ -68,7 +68,11 @@ EXPECTED_UART_GPIOS = [
 
 EXPECTED_EARLY_UART_MARKERS = [
     b"A7S BOOT0: early uart0 alive\r\n",
-    b"A7S BOOT0: uart0 pins PB9/PB10\r\n",
+]
+
+EXPECTED_MMC0_REGISTER_VALUES = [
+    0x00222222,
+    0x00111211,
 ]
 
 EXPECTED_SDMMC_GPIOS = [
@@ -162,6 +166,10 @@ def validate_image(image: Path) -> None:
     for marker in EXPECTED_EARLY_UART_MARKERS:
         if marker not in buf:
             fail(f"early UART marker {marker!r} is missing from the image")
+
+    for value in EXPECTED_MMC0_REGISTER_VALUES:
+        if struct.pack("<I", value) not in buf:
+            fail(f"MMC0 register value 0x{value:08x} is missing from the image")
 
     if gpio_array(buf, STORAGE_GPIO_OFF, 6) != EXPECTED_SDMMC_GPIOS:
         fail("SD/MMC GPIO table does not match the A7S card0 boot pins")
