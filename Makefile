@@ -2,15 +2,17 @@
 # boot0-A7S : standalone, self-contained build of a real, bootable boot0 for
 #             Allwinner A733 (sun60iw2p1), SD/MMC boot medium.
 #
-# It compiles the REAL vendor sources (boot0_main.c / boot0_head.c /
-# boot0_entry.S / solution) and links them against the REAL pre-built closed
-# blobs (board driver blob + DRAM training lib), producing boot0.bin that is
-# functionally identical to device-a733/bin/boot0_sdcard_sun60iw2p1.bin.
+# It compiles the vendor boot0 sources and links them against the real
+# pre-built board/DRAM blobs.  The legacy TOC1 loader is replaced by a strict
+# TF-A FIP loader and a DRAM-resident BL31 handoff for the A733 boot chain.
 #
-# No code is stubbed: every interface is the genuine vendor implementation.
+# Low-level DRAM, MMC, PMIC, clock, and CPU-release operations still use the
+# genuine vendor implementations or instruction sequences verified from them.
 # =============================================================================
 
 CROSS   ?= $(if $(shell command -v arm-linux-gnueabi-gcc 2>/dev/null),arm-linux-gnueabi-,arm-none-eabi-)
+HOSTCC  ?= cc
+FIPTOOL ?= $(abspath $(TOP)/../arm-trusted-firmware/tools/fiptool/fiptool)
 CC       = $(CROSS)gcc
 LD       = $(CROSS)ld
 OBJCOPY  = $(CROSS)objcopy
@@ -72,9 +74,11 @@ PLATFORM_LIBGCC := -L $(shell dirname `$(CC) $(CFLAGS) -print-libgcc-file-name`)
 # ---- objects ----------------------------------------------------------------
 # Real compiled-from-source objects:
 OBJS := $(BUILD)/boot0_entry.o \
+        $(BUILD)/fip_handoff.o \
         $(BUILD)/boot0_head.o \
         $(BUILD)/early_uart.o \
         $(BUILD)/boot0_main.o \
+        $(BUILD)/sunxi_fip.o \
         $(BUILD)/platform_shims.o
 
 # Real pre-built closed blob.
@@ -94,21 +98,58 @@ LDS_IN  := $(TOP)/arch/armv7/boot0.lds
 LDS_OUT := $(BUILD)/boot0.lds
 
 NAME := boot0_sdcard_$(PLATFORM)
+FIPTOOL_TEST_IMAGE := $(BUILD)/test_fiptool.bin
 
-.PHONY: all clean verify
+.PHONY: all clean test test-fiptool verify
 all: $(BUILD)/$(NAME).bin
+
+test: $(BUILD)/test_sunxi_fip
+	$<
+
+$(BUILD)/test_sunxi_fip: $(TOP)/tests/test_sunxi_fip.c \
+				 $(TOP)/src/sunxi_fip.c \
+				 $(TOP)/include/sunxi_fip.h | $(BUILD)
+	$(HOSTCC) -std=c11 -Wall -Wextra -Werror \
+		-I$(TOP)/include -I$(TOP)/include/arch/arm -o $@ \
+		$(TOP)/tests/test_sunxi_fip.c $(TOP)/src/sunxi_fip.c
+
+ifneq ($(wildcard $(FIPTOOL)),)
+$(FIPTOOL_TEST_IMAGE): $(BUILD)/test_sunxi_fip \
+			       $(TOP)/tests/test_sunxi_fip.c $(FIPTOOL) | $(BUILD)
+	$(FIPTOOL) create --align 512 \
+		--scp-fw $(TOP)/tests/test_sunxi_fip.c \
+		--soc-fw $(TOP)/tests/test_sunxi_fip.c \
+		--nt-fw $(TOP)/tests/test_sunxi_fip.c $@
+
+test-fiptool: test $(FIPTOOL_TEST_IMAGE)
+	$(BUILD)/test_sunxi_fip $(FIPTOOL_TEST_IMAGE)
+else
+test-fiptool: test
+	@echo "SKIP: TF-A fiptool not found at $(FIPTOOL)"
+endif
 
 # ---- compile rules ----------------------------------------------------------
 $(BUILD)/boot0_entry.o: $(TOP)/arch/armv7/boot0_entry.S | $(BUILD)
 	$(CC) $(AFLAGS) -c -o $@ $<
 
+$(BUILD)/fip_handoff.o: $(TOP)/arch/armv7/fip_handoff.S \
+				 $(TOP)/include/configs/sun60iw2p1.h | $(BUILD)
+	$(CC) $(AFLAGS) -c -o $@ $<
+
 $(BUILD)/boot0_head.o: $(TOP)/src/boot0_head.c | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/boot0_main.o: $(TOP)/src/boot0_main.c | $(BUILD)
+$(BUILD)/boot0_main.o: $(TOP)/src/boot0_main.c \
+			       $(TOP)/include/sunxi_fip.h \
+			       $(TOP)/include/sunxi_flashmap.h \
+			       $(TOP)/include/configs/sun60iw2p1.h | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/early_uart.o: $(TOP)/src/early_uart.c | $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/sunxi_fip.o: $(TOP)/src/sunxi_fip.c \
+			      $(TOP)/include/sunxi_fip.h | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/platform_shims.o: $(TOP)/src/platform_shims.c | $(BUILD)
@@ -142,7 +183,7 @@ $(BUILD)/$(NAME).bin: $(BUILD)/boot0.bin
 $(BUILD):
 	@mkdir -p $(BUILD)
 
-verify: all
+verify: all test-fiptool
 	@echo "=== ELF arch ==="; $(OBJDUMP) -f $(BUILD)/boot0.elf | head
 	@echo "=== size ==="; ls -l $(BUILD)/$(NAME).bin
 	@echo "=== entry head (first 32 bytes) ==="; xxd -l 32 $(BUILD)/$(NAME).bin
