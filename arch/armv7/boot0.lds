@@ -8,24 +8,24 @@ SECTIONS
 
 	.head   :
 	{
-		*boot0_head.o	(.rodata)
+		*boot0_head.o	(.rodata .rodata.*)
 	}
     . = ALIGN(1);
 	.text :
 	{
 		*boot0_entry.o (.text)
-		*(.text)
+		*(.text .text.*)
 	}
 	. = ALIGN(16);
-  	.rodata : { *(.rodata) }
+	.rodata : { *(.rodata .rodata.*) }
 	. = ALIGN(16);
-  	.data : { *(.data) }
+	.data : { *(.data .data.*) }
 
 	. = ALIGN(4);
 	.bss :
 	{
 	__bss_start = .;
-		*(.bss)
+		*(.bss .bss.* COMMON)
 	}
 	. = ALIGN(4);
 	__bss_end = .;
@@ -33,6 +33,4 @@ SECTIONS
 	_end = .;
 	ASSERT(. <= (BOOT0ADDR + BOOT0SIZE), "boot0 image has exceeded its limit.")
 }
-
-
 
