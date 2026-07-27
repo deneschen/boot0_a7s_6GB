@@ -91,6 +91,20 @@ MMC_REGISTER_MAP_RE = re.compile(
     r"\s*0x[0-9a-f]+\s+mmc_register\b"
 )
 
+REQUIRED_FIP_SYMBOLS = [
+    "fip_handoff_start",
+    "fip_handoff_end",
+    "sunxi_fip_read_image",
+    "sunxi_fip_read_redundant",
+    "sunxi_fip_copy_images",
+    "sunxi_fip_load_redundant",
+]
+
+FORBIDDEN_TOC1_LOADER_SYMBOLS = [
+    "load_package",
+    "load_image",
+]
+
 
 def u32(buf: bytes, off: int) -> int:
     return struct.unpack_from("<I", buf, off)[0]
@@ -114,6 +128,12 @@ def boot0_checksum_ok(buf: bytes) -> bool:
     words[3] = STAMP_VALUE
     total = sum(words) & 0xFFFFFFFF
     return total == u32(buf, 0x0C)
+
+
+def linked_symbol(text: str, symbol: str) -> bool:
+    return re.search(
+        rf"^\s*0x[0-9a-f]+\s+{re.escape(symbol)}\s*$", text, re.MULTILINE
+    ) is not None
 
 
 def fail(message: str) -> None:
@@ -215,6 +235,14 @@ def validate_map(map_file: Path) -> None:
 
     if f"0x{EXPECTED_BOOT0_TEXT_ADDR:08x}                _start" not in text:
         fail(f"_start is not linked at 0x{EXPECTED_BOOT0_TEXT_ADDR:x}")
+
+    for symbol in REQUIRED_FIP_SYMBOLS:
+        if not linked_symbol(text, symbol):
+            fail(f"link map does not include the active FIP loader symbol {symbol}")
+
+    for symbol in FORBIDDEN_TOC1_LOADER_SYMBOLS:
+        if linked_symbol(text, symbol):
+            fail(f"link map still includes the legacy TOC1 loader symbol {symbol}")
 
 
 def main() -> None:

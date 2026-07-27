@@ -13,6 +13,7 @@
 #define CONFIG_ARCH_SUN60IW2P1
 #define CONFIG_DRAM_PARA_V1
 #define CONFIG_MONITOR
+#define CONFIG_SUNXI_FIP
 #define CONFIG_SUNXI_VERSION_AOTUGEN 1
 /*#define FPGA_PLATFORM*/
 
@@ -24,7 +25,13 @@
 #define CONFIG_HEAP_SIZE                  (16 * 1024 * 1024)
 
 #define CONFIG_BOOTPKG_BASE               SDRAM_OFFSET(0x02e00000)
+#define CONFIG_FIP_STAGING_SIZE           (0x00200000)
+#define CONFIG_FIP_HANDOFF_BASE            (CONFIG_BOOTPKG_BASE - 0x1000)
+#define CONFIG_FIP_HANDOFF_SIZE            (0x1000)
+#define CONFIG_FIP_HANDOFF_PARAM_OFFSET    (0x0800)
+#define CONFIG_FIP_HANDOFF_PARAM_ADDR      (CONFIG_FIP_HANDOFF_BASE + CONFIG_FIP_HANDOFF_PARAM_OFFSET)
 #define CONFIG_MONITOR_BASE               SDRAM_OFFSET(0x08000000)
+#define CONFIG_UBOOT_BASE                 SDRAM_OFFSET(0x0a000000)
 #define SCP_DRAM_BASE                     SDRAM_OFFSET(0x08100000)
 #define SCP_DTS_BASE                      SDRAM_OFFSET(0x08100000)
 
@@ -46,8 +53,9 @@
 #define SCP_SRAM_SIZE                    (CONFIG_SYS_SRAMA2_SIZE)
 #define HEADER_OFFSET                    (0x4000)
 /*dram_para_offset is the numbers of u32 before dram data sturcture(dram_para) in struct arisc_para*/
-#define SCP_DRAM_PARA_OFFSET  (sizeof(u32) * 2)
+#define SCP_DRAM_PARA_OFFSET  (2 * 4)
 #define SCP_DARM_PARA_NUM     (32)
+#define SCP_BOOT_PARAM_ADDR   (SCP_SRAM_BASE + HEADER_OFFSET + SCP_DRAM_PARA_OFFSET)
 
 
 /* boot run addr */
