@@ -58,7 +58,11 @@ COMM_FLAGS := -nostdinc $(LIBGCCINC) $(INC) \
 	-mno-unaligned-access \
 	-D__LINUX_ARM_ARCH__=7
 
-CFLAGS := $(COMM_FLAGS)
+# The A733 executes Thumb-2 code natively.  Keep the reset vector in ARM
+# state, while compiling the board-specific C wrappers as Thumb-2 to reduce
+# their footprint; -mthumb-interwork lets the linker create the required
+# state-switch veneers at the assembly/C boundary.
+CFLAGS := $(COMM_FLAGS) -mthumb -fdata-sections
 AFLAGS := $(COMM_FLAGS) -D__ASSEMBLY__
 
 LDFLAGS_GC := --gc-sections

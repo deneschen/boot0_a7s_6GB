@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import struct
 import sys
 from pathlib import Path
@@ -70,11 +71,6 @@ EXPECTED_EARLY_UART_MARKERS = [
     b"A7S BOOT0: early uart0 alive\r\n",
 ]
 
-EXPECTED_MMC0_REGISTER_VALUES = [
-    0x00222222,
-    0x00111211,
-]
-
 EXPECTED_SDMMC_GPIOS = [
     (6, 2, 2, 1, 1, 0xFF),
     (6, 3, 2, 1, 1, 0xFF),
@@ -88,6 +84,12 @@ EXPECTED_I2C_GPIOS = [
     (12, 0, 2, 1, 0xFF, 0xFF),
     (12, 1, 2, 1, 0xFF, 0xFF),
 ]
+
+MMC_REGISTER_MAP_RE = re.compile(
+    r"\.text\.mmc_register\s*\n"
+    r"\s*0x[0-9a-f]+\s+0x[0-9a-f]+\s+.*?/platform_shims\.o\s*\n"
+    r"\s*0x[0-9a-f]+\s+mmc_register\b"
+)
 
 
 def u32(buf: bytes, off: int) -> int:
@@ -167,10 +169,6 @@ def validate_image(image: Path) -> None:
         if marker not in buf:
             fail(f"early UART marker {marker!r} is missing from the image")
 
-    for value in EXPECTED_MMC0_REGISTER_VALUES:
-        if struct.pack("<I", value) not in buf:
-            fail(f"MMC0 register value 0x{value:08x} is missing from the image")
-
     if gpio_array(buf, STORAGE_GPIO_OFF, 6) != EXPECTED_SDMMC_GPIOS:
         fail("SD/MMC GPIO table does not match the A7S card0 boot pins")
 
@@ -202,6 +200,12 @@ def validate_map(map_file: Path) -> None:
 
     if "a7s_axp8191_init" not in text:
         fail("link map does not include the AXP8191 PMIC implementation")
+
+    # Do not inspect instruction bytes: ARM and Thumb-2 encode the same MMC0
+    # register writes differently.  The map proves the A7S replacement is
+    # linked instead of the FPGA blob's mmc_register implementation.
+    if not MMC_REGISTER_MAP_RE.search(text):
+        fail("link map does not include the A7S MMC registration override")
 
     if b"A7S PMU: AXP8191 ready on TWI6" not in map_file.with_name("boot0.bin").read_bytes():
         fail("boot0 image does not include the AXP8191 DRAM rail implementation")
