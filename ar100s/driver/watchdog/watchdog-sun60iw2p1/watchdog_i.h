@@ -56,11 +56,11 @@
 #define WDOG0_INTV_VALUE_04S   (4 << 4)  /* 4.0 sec, 128000 */
 #define WDOG0_INTV_VALUE_05S   (5 << 4)  /* 5.0 sec, 160000 */
 #define WDOG0_INTV_VALUE_06S   (6 << 4)  /* 6.0 sec, 192000 */
-#define WDOG0_INTV_VALUE_07S   (7 << 4)  /* 7.0 sec, 256000 */
-#define WDOG0_INTV_VALUE_08S   (8 << 4)  /* 8.0 sec, 320000 */
-#define WDOG0_INTV_VALUE_09S   (9 << 4)  /* 9.0 sec, 384000 */
-#define WDOG0_INTV_VALUE_10S   (10 << 4) /*10.0 sec, 448000 */
-#define WDOG0_INTV_VALUE_11S   (11 << 4) /*11.0 sec, 512000 */
+#define WDOG0_INTV_VALUE_08S   (7 << 4)  /* 8.0 sec, 256000 */
+#define WDOG0_INTV_VALUE_10S   (8 << 4)  /* 10.0 sec, 320000 */
+#define WDOG0_INTV_VALUE_12S   (9 << 4)  /* 12.0 sec, 384000 */
+#define WDOG0_INTV_VALUE_14S   (10 << 4) /* 14.0 sec, 448000 */
+#define WDOG0_INTV_VALUE_16S   (11 << 4) /* 16.0 sec, 512000 */
 
 /* watchdog0 enable and disable */
 #define WDOG0_EN  (1<<0)

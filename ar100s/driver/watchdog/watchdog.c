@@ -53,11 +53,8 @@ s32 watchdog_init(void)
 	pwatchdog_regs->config = value;
 
 	/*
-	 * if sclk=32k and interval value=16000,
-	 * then interval time=0.5s
-	 * the interval value maybe greater,
-	 * then will decrease cpu performance loss
-	 * set watchdog0 Interval Value:16000 cycles
+	 * set watchdog0 Interval Value: 128k cycles,
+	 * about 4 s with the RTC_32K source (32.768 kHz).
 	 */
 	value = pwatchdog_regs->mode & 0xffff;
 	value &= ~(0xf << 4);
