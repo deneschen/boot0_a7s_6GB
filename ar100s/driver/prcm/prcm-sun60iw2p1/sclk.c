@@ -56,6 +56,11 @@ s32 ccu_get_sclk_freq(u32 sclk)
 					/* assume pll_peri0(1x) / factor_m must 200M */
 					return CCU_CPUS_PLL0_FREQ;
 				}
+			case 4:
+				{
+					/* cpus clock source is PERIO_300M */
+					return CCU_CPUS_PERIO_300M_FREQ;
+				}
 			default:
 				{
 					return 0;
