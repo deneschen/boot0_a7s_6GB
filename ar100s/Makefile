@@ -16,23 +16,7 @@ else
 endif
 
 ifneq ($(CFG_ARCH_PLATFORM),)
-ifneq ($(CFG_OPENRISC),)
-PATH :=$(CURDIR)/tools/or32-elf-gcc/toolchain/bin:$(PATH)
-LD_LIBRARY_PATH:=$(LD_LIBRARY_PATH):$(CURDIR)/tools/or32-elf-gcc/toolchain/lib
-CC=or32-elf-gcc
-LD=or32-elf-ld
-AR=or32-elf-ar
-OBJC=or32-elf-objcopy
-OBJDUMP=or32-elf-objdump
-NM=or32-elf-nm
-SIZE=or32-elf-size
-STRIP=or32-elf-strip
-
-# copy from ar100
-#openrisc arch config options
-MARCH_FLAGS ?=-mhard-mul -msoft-div -msoft-float
-
-else ifneq ($(CFG_RISCV),)
+ifneq ($(CFG_RISCV),)
 # Prefer a system RISC-V bare-metal toolchain (Ubuntu: gcc-riscv64-unknown-elf).
 # Optional local vendor tree under tools/ is still searched first if present.
 PATH :=$(CURDIR)/tools/riscv64-elf-x86_64-20201104/bin/:$(PATH)
@@ -107,18 +91,6 @@ define filechk_version
 	echo "#endif /* _SUB_VER_ */";)
 endef
 
-define uncompress_toolchain
-	(echo "uncompress toolchain package...";\
-	rm -rf ./tools/or32-elf-gcc; \
-	mkdir -p ./tools/or32-elf-gcc/; \
-	tar -jxvf ./tools/or32-elf-gcc.tar.bz2 -C ./tools/or32-elf-gcc/; \
-	rm -rf ./tools/riscv64-elf-x86_64-20201104; \
-	mkdir -p ./tools/riscv64-elf-x86_64-20201104/; \
-	tar zxvf ./tools/riscv64-elf-x86_64-20201104.tar.gz -C ./tools/riscv64-elf-x86_64-20201104/; \
-	echo "uncompress toolchain finish"; \
-	touch ./tools/.toolchain.flag;)
-endef
-
 target_name = $(OUTPUT)scp
 all: $(target_name).bin
 
@@ -177,7 +149,6 @@ test:
 
 $(notdir $(wildcard arch/configs/*_defconfig)): FORCE
 	$(Q)scripts/conf --defconfig=arch/configs/$@ Kconfig
-	$(Q)if ! test -f tools/.toolchain.flag;then $(uncompress_toolchain);fi;
 
 scripts/basic/fixdep: scripts/basic/fixdep.c
 	$(Q)$(if $(OUTPUT),mkdir -p $(OUTPUT),)
@@ -207,11 +178,7 @@ $(target_name).elf:$(addsuffix /obj-in.o,$(addprefix $(OUTPUT),$(sub_dir))) FORC
 	$(Q)$(SIZE) $(addprefix $(OUTPUT),$(addsuffix /obj-in.o,$(sub_dir))) $@
 
 $(target_name).bin: $(target_name).raw
-ifneq ($(CFG_OPENRISC),)
-	be2le $^ $@
-else
 	cp $^ $@
-endif
 	@if [ $${LICHEE_BRANDY_OUT_DIR} ];then cp $@ $${LICHEE_BRANDY_OUT_DIR}; \
 		echo copy $@ to $${LICHEE_BRANDY_OUT_DIR};\
 		fi
