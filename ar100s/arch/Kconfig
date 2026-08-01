@@ -1,11 +1,5 @@
 
-config CPUX_ARM32
-	bool
-
 config CPUX_ARM64
-	bool
-
-config OPENRISC
 	bool
 
 config RISCV
@@ -45,5 +39,4 @@ config CHIP_PLATFORM
 
 config ARCH_PLATFORM
 	string "The name of SUNXI ARCH"
-	default "openrisc" if OPENRISC
 	default "riscv" if RISCV
