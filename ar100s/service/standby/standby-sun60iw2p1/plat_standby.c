@@ -326,7 +326,7 @@ static void wait_cpu0_resume(void)
 
 	/* wait cpu0 restore finished. */
 	while (1) {
-		ret = hwmsgbox_query_message(&message, 0, 0);
+		ret = hwmsgbox_query_message(&message, 0, HWMSGBOX_QUERY_TIMEOUT);
 		if (ret != OK)
 			continue; /* no message, query again */
 

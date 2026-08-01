@@ -5,7 +5,7 @@ ENTRY(_start)
 
 MEMORY
 {
-	dram (rxaiw) : o = 0x40004000, l = 0x2C000
+	dram (rxaiw) : o = 0x40004000, l = 0x30000
 }
 
 PHDRS
@@ -16,8 +16,8 @@ PHDRS
 
 SECTIONS
 {
-	metal_segment_stack_begin = 0x4002EC00;
-	metal_segment_stack_end = 0x4002F000;
+	metal_segment_stack_begin = 0x40033000;
+	metal_segment_stack_end = 0x40034000;
 	PROVIDE (__etext = .);
 	PROVIDE (_etext = .);
 	PROVIDE (etext = .);

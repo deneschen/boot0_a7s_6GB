@@ -27,6 +27,8 @@
 
 /* message send timeout set*/
 #define SEND_MSG_TIMEOUT                (100000)	/* send message max timeout, base on ms */
+#define STARTUP_NOTIFY_TIMEOUT          (3000)	/* startup notify is best-effort during bring-up */
+#define HWMSGBOX_QUERY_TIMEOUT          (100)	/* per-word receive timeout, base on ms */
 #define MESSAGE_PARA_MAX                (32)
 
 typedef struct message {

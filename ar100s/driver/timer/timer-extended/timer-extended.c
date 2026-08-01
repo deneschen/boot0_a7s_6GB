@@ -59,9 +59,10 @@ s32 timer_init(void)
 
 		/*
 		 * timer tick time base on ms,
-		 * source clock = SYS_CLK24M, pre-scale = 1.
+		 * source clock = pll-ref (fixed 24 MHz), pre-scale = 1.
+		 * ms_ticks below assumes REFPLL is exactly 24.000 MHz.
 		 */
-		/* source clock = 24M */
+		/* source clock = pll-ref */
 		value = readl(EXT_TIMER_CLK_REG(index));
 		value &= ~(0x7 << 4);
 		value |= (0x4 << 4);
@@ -378,7 +379,7 @@ s32 timer_hosc_onoff_cb(u32 message, u32 aux)
 				value = value * (24000 / 32);
 				writel(value, EXT_TIMER_IVL_REG(index));
 
-				/* set source clock to 24M */
+				/* set source clock to pll-ref (24M) */
 				value = readl(EXT_TIMER_CLK_REG(index));
 				value &= ~(0x7 << 4);
 				value |= (0x4 << 4);

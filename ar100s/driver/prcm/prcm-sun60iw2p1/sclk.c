@@ -87,7 +87,7 @@ s32 ccu_get_sclk_freq(u32 sclk)
 				}
 				case 4:
 					{
-						/* apbs1 clock source is SYS_CLK24M */
+						/* apbs1 clock source is pll-ref (fixed 24 MHz) */
 						return CCU_SYS_CLK24M_FREQ;
 				}
 			default:

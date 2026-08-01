@@ -73,6 +73,14 @@ fiptool create --align 512 \
 - DTB、DRAM 和待机属性按完整 FDT 头及单个 32 位单元严格校验。
 - 链接脚本分离 RX/RW 段，并断言 BSS、栈和 SRAM 边界。
 
+后续稳健性修正：
+
+- 启动通知改为短超时（3 s）的尽力而为发送，迟到的应答在消息循环中被丢弃，避免在无 ARM 侧应答者时阻塞约 100 s。
+- 邮箱接收路径改为有界等待（每字 100 ms），超时后尽力排空残余帧并清除 pending，避免部分帧导致后续协议失步。
+- DTB 基址不再要求等于 `0x48100000`，改为接受 boot0 发布的 E902 视角 DRAM 地址（`0x40000000–0x7FF00000` 窗口内），仍以 FDT 头校验把关，并防止越界地址触发无 MMU 核的总线错误死循环。
+- 运行时栈由 1 KB 扩大到 4 KB，上移到"仅 CPUS 可用"的 SRAM 顶区（`0x40033000–0x40034000`）。
+- 系统定时器时钟源注释更正为 pll-ref（固定 24 MHz，依赖 REFPLL=24.000 MHz 前提）。
+
 ## 构建与验证
 
 ```bash
@@ -101,10 +109,10 @@ make verify-all
 | 文件 | 大小 | SHA256 |
 |---|---:|---|
 | `build/boot0_sdcard_sun60iw2p1.bin` | 237568 | `e60bcf8586694e4fc81bad9ee20ae4e4b54e588480caf40e9a9bdb1f306a3516` |
-| `build/scp.bin` | 118552 | `d99b9e1332cf1333a8d6f6b0b9321a67df2c8579e813ee07f24afcfa7439cf3d` |
-| `build/scp.elf` | 401252 | `3b88891cd698f81293c347771a6f81f1e20eba7a2a1794b5ba1730a595265a60` |
+| `build/scp.bin` | 118648 | `d4f5115abaf40e148fd538fc6fba37fccb5bfdfb9f3a67156651d5bd77fef8b3` |
+| `build/scp.elf` | 401812 | `fc7ea7d6953223a1b8a6d36780b1861df8f6c6aa8be32d10af09e13d9dc935a8` |
 
-AR100S 检查结果为入口 `0x40004000`、文件大小 `118552`、BSS 到栈底余量 `9660` 字节；ELF 为 RV32E/RVC soft-float ABI，且没有 RWX LOAD 段。
+AR100S 检查结果为入口 `0x40004000`、文件大小 `118648`、BSS 到栈底余量 `26972` 字节；ELF 为 RV32E/RVC soft-float ABI，且没有 RWX LOAD 段。
 
 ## 证据边界和剩余工作
 
