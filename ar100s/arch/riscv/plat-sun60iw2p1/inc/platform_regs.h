@@ -334,6 +334,7 @@
 #define CCU_SYS_CLK24M_FREQ		(24000000)	//fixed 24M system clock
 #define CCU_LOSC_FREQ			(31250)	//31250
 #define CCU_CPUS_PLL0_FREQ		(200000000)
+#define CCU_CPUS_PERIO_300M_FREQ	(300000000)	//AHBS source select 100: PERIO_300M
 #define CCU_APBS2_PLL0_FREQ		(200000000)
 #define CCU_IOSC_FREQ			(16000000)	//16M
 #define CCU_CPUS_POST_DIV		(100000000)	//cpus post div source clock freq
