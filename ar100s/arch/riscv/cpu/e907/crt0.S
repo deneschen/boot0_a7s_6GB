@@ -47,43 +47,11 @@ _start:
   li  x13,0
   li  x14,0
   li  x15,0
-#  li  x16,0
-#  li  x17,0
-#  li  x18,0
-#  li  x19,0
-#  li  x20,0
-#  li  x21,0
-#  li  x22,0
-#  li  x23,0
-#  li  x24,0
-#  li  x25,0
-#  li  x26,0
-#  li  x27,0
-#  li  x28,0
-#  li  x29,0
-#  li  x30,0
-#  li  x31,0
-
-#  jal 0x20000
-
-# enable extension
-#  li   a3, 0x400000
-#  csrs mxstatus,a3
-
-# enable fpu
-#  li a3, 0x802000
-#  csrs mstatus,a3
-
-# enable spushen, add by gjt
-#  li a3, 0x10000
-#  csrs mexstatus, a3
-
 
   la gp, __global_pointer
 
   .global cpu_0_sp
 cpu_0_sp:
- # la x2, __kernel_stack
  la x2, metal_segment_stack_end
 # init stack
  li a3, 0
@@ -102,26 +70,9 @@ init_sp:
   li   a3, 0x8
   csrs mstatus,a3
 
-
-#  # invalid all memory for BTB,BHT,DCACHE,ICACHE
-#  li a3, 0x30013
-#  csrs 0x7c2,a3  #mcor
-
-  # enable ICACHE,DCACHE,BHT,BTB,RAS,WA
-#  li x3, 0x7f
-#   li a3, 0x70	#cache disable
-#  li a3, 0x7f
-#  li   a3,0x103f
-#  csrs 0x7c1,a3  #mhcr
-
-#  # enable data_cache_prefetch, amr
-#  li a3, 0x610c
-#  csrs 0x7c5,a3   #mhint
-
   /*Zero bss*/
   jal	clean_bss
 
-#  jal	main
   jal	startup_entry
 
   /* Call exit to handle libc's cleanup routines.  Under normal contains this
@@ -170,246 +121,6 @@ __fail:
 	.global __undefine_exception
 .align 6
 __trap_handler:
-/* fengxin
-	#0
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-
-	#20
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-
-	#40
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a timer0_handler
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-
-	#60
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-
-	#80
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-
-	#100
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-
-	#120
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-
-	#140
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a  __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-	.dc.a __undefine_exception
-*/
 j __synchronous_exception
 
 __synchronous_exception:
@@ -426,19 +137,10 @@ __synchronous_exception:
   sw   a3,7*8(sp)
   sw   a4,8*8(sp)
   sw   a5,9*8(sp)
-
-#  sw   a6,10*8(sp)
-#  sw   a7,11*8(sp)
-#  sw   x28,12*8(sp)
-#  sw   x29,13*8(sp)
-# sw   x30,14*8(sp)
-#  sw   x31,15*8(sp)
   csrr a0,mcause
   csrr a1,mepc
   call hadle_trap
-# addi a0,a0,2
   csrw mepc,a0
-
 
   lw   x1,0*8(sp)
   lw   x5,1*8(sp)
@@ -451,13 +153,6 @@ __synchronous_exception:
   lw   a4,8*8(sp)
   lw   a5,9*8(sp)
 
-
- # lw   a6,10*8(sp)
- # lw   a7,11*8(sp)
- # lw   x28,12*8(sp)
- # lw   x29,13*8(sp)
- # lw   x30,14*8(sp)
- # lw   x31,15*8(sp)
   addi sp,sp,16*8
   mret
 
@@ -467,7 +162,6 @@ __dummy:
 
 __undefine_exception:
 	j __undefine_exception
-
 
 
   /* This shim allows main() to be passed a set of arguments that can satisfy the
