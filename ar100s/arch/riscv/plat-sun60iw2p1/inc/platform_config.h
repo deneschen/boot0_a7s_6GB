@@ -21,6 +21,10 @@
 
 /* devices define */
 #define ARISC_DTS_SIZE		(0x00100000)
+/* expected default HW_CONFIG address published by the FIP handoff */
 #define ARISC_DTS_BASE		(0x48100000)
+/* E902-visible DRAM window (identity-mapped to the CPUX DRAM view) */
+#define ARISC_DRAM_BASE		(0x40000000)
+#define ARISC_DRAM_END		(0x80000000)
 
 #endif

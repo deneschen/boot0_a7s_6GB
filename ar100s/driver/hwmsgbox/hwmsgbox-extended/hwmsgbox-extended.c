@@ -25,6 +25,9 @@
 #define hwmsgbox_clear_receiver_pending(queue)\
 	writel((0x1 << (queue * 2)), MSGBOX_ARM_TO_RISC_IRQ_STATUS_REG)
 
+/* upper bound for best-effort drain of a partial frame on receive timeout */
+#define HWMSGBOX_RX_DRAIN_MAX		(128)
+
 
 /*
 *********************************************************************************************************
@@ -265,30 +268,34 @@ int hwmsgbox_feedback_message(struct message *pmessage, u32 timeout)
 *********************************************************************************************************
 */
 static s32 hwmsgbox_receive_message(u32 queue, struct message *pmessage,
-				    u32 para_capacity)
+				    u32 para_capacity, u32 timeout)
 {
 	u32 i;
 	u32 value;
 	u32 count;
+	s32 ret;
 
-	while (!readl(MSGBOX_ARM_TO_RISC_MSG_STATUS_REG(queue)))
-		;
+	ret = hwmsgbox_wait_queue_not_empty(queue, timeout);
+	if (ret != OK)
+		goto drain;
 	value = readl(MSGBOX_ARM_TO_RISC_MSG_REG(queue));
 	pmessage->state = value & 0xff;
 	pmessage->attr = (value >> 8) & 0xff;
 	pmessage->type = (value >> 16) & 0xff;
 	pmessage->result = (value >> 24) & 0xff;
 
-	while (!readl(MSGBOX_ARM_TO_RISC_MSG_STATUS_REG(queue)))
-		;
+	ret = hwmsgbox_wait_queue_not_empty(queue, timeout);
+	if (ret != OK)
+		goto drain;
 	value = readl(MSGBOX_ARM_TO_RISC_MSG_REG(queue));
 	count = value & 0xff;
 	pmessage->count = count;
 
 	/* Always drain the frame so an oversized message cannot desync the FIFO. */
 	for (i = 0; i < count; i++) {
-		while (!readl(MSGBOX_ARM_TO_RISC_MSG_STATUS_REG(queue)))
-			;
+		ret = hwmsgbox_wait_queue_not_empty(queue, timeout);
+		if (ret != OK)
+			goto drain;
 		value = readl(MSGBOX_ARM_TO_RISC_MSG_REG(queue));
 		if (i < para_capacity)
 			pmessage->paras[i] = value;
@@ -299,13 +306,20 @@ static s32 hwmsgbox_receive_message(u32 queue, struct message *pmessage,
 		return -E2BIG;
 
 	return OK;
+
+drain:
+	/* Best effort: remove any partial frame so a later query
+	 * starts at a frame boundary. */
+	for (i = 0; i < HWMSGBOX_RX_DRAIN_MAX &&
+	     readl(MSGBOX_ARM_TO_RISC_MSG_STATUS_REG(queue)); i++)
+		readl(MSGBOX_ARM_TO_RISC_MSG_REG(queue));
+	hwmsgbox_clear_receiver_pending(queue);
+	return ret;
 }
 
 s32 hwmsgbox_query_message(struct message *pmessage, u32 para_capacity,
 			   u32 timeout)
 {
-	(void)timeout;
-
 	if (!pmessage || para_capacity > MESSAGE_PARA_MAX ||
 	    (para_capacity && !pmessage->paras))
 		return -EINVAL;
@@ -314,14 +328,14 @@ s32 hwmsgbox_query_message(struct message *pmessage, u32 para_capacity,
 	if (!!readl(MSGBOX_ARM_TO_RISC_MSG_STATUS_REG(HWMSGBOX_RISC_ASYN_RX_CH))) {
 		LOG("query asyn msg\n");
 		return hwmsgbox_receive_message(HWMSGBOX_RISC_ASYN_RX_CH,
-						pmessage, para_capacity);
+						pmessage, para_capacity, timeout);
 	}
 
 	/* query ar100 syn received channel */
 	if (!!readl(MSGBOX_ARM_TO_RISC_MSG_STATUS_REG(HWMSGBOX_ARM_SYN_TX_CH))) {
 		LOG("query syn msg\n");
 		return hwmsgbox_receive_message(HWMSGBOX_ARM_SYN_TX_CH,
-						pmessage, para_capacity);
+						pmessage, para_capacity, timeout);
 	}
 
 	/* no valid message */

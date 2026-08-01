@@ -52,7 +52,7 @@ static s32 startup_state_notify(s32 result)
 	/* must end with '\0' */
 	strncpy((char *)(arisc_version), SUB_VER, sizeof(arisc_version) - 1);
 
-	ret = hwmsgbox_send_message(&message, SEND_MSG_TIMEOUT);
+	ret = hwmsgbox_send_message(&message, STARTUP_NOTIFY_TIMEOUT);
 
 	if (ret == OK)
 		LOG("send notify succeed\n");
@@ -77,8 +77,10 @@ static void message_process_loop(void)
 
 	message.paras = msg_paras;
 
-	ret = hwmsgbox_query_message(&message, MESSAGE_PARA_MAX, 0);
-	if (ret == OK)
+	ret = hwmsgbox_query_message(&message, MESSAGE_PARA_MAX,
+				     HWMSGBOX_QUERY_TIMEOUT);
+	/* A late reply to our own startup notify is not a real message. */
+	if (ret == OK && message.type != AR100_STARTUP_NOTIFY)
 		message_coming_notify(&message);
 
 	amp_msgbox_query_message();
@@ -116,8 +118,18 @@ static s32 dtb_base_init(void)
 {
 	u32 base = read_dtb_base();
 
+	/*
+	 * RTC_DTB_BASE_STORE_REG shares the RTC_RECORD_REG cell with
+	 * save_state_flag(): the handoff address must be read here, before
+	 * the first state flag write below overwrites it.
+	 *
+	 * Accept whatever E902-view DRAM address boot0 published; keep the
+	 * access inside the E902-visible DRAM window so an out-of-range
+	 * address cannot raise a bus fault on this MMU-less core.
+	 */
 	dtb_base = 0;
-	if (base != ARISC_DTS_BASE)
+	if (base < ARISC_DRAM_BASE ||
+	    base > (u32)(ARISC_DRAM_END - ARISC_DTS_SIZE))
 		return -EINVAL;
 	if (cpucfg_set_little_endian_address((void *)base,
 			(void *)(base + ARISC_DTS_SIZE)) != OK)
