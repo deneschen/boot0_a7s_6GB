@@ -21,7 +21,7 @@
 
 u32 debug_level = 3;
 volatile unsigned int print_timeflg = 1;
-#define DEBUG_BUFFER_SIZE (128) /* debug buffer size */
+#define DEBUG_BUFFER_SIZE (256) /* debug buffer size */
 /*
 *********************************************************************************************************
 *                                           INITIALIZE DEBUGGER
@@ -138,7 +138,7 @@ char debugger_buffer[DEBUG_BUFFER_SIZE];
 s32 debugger_printf(u32 level, const char *format, ...)
 {
 	va_list  args;
-	char     string[16];    /* align by cpu word */
+	char     string[32];    /* align by cpu word */
 	char    *pdest;
 	char    *psrc;
 	s32      align;
@@ -153,6 +153,9 @@ s32 debugger_printf(u32 level, const char *format, ...)
 		pdest = debugger_buffer;
 		va_start(args, format);
 		while (*format) {
+			/* keep room for a numeric token and the trailing '\0' */
+			if ((pdest - debugger_buffer) >= (DEBUG_BUFFER_SIZE - 16))
+				break;
 			if (*format == '%') {
 				++format;
 				if (('0' < (*format)) && ((*format) <= '9')) {
@@ -198,15 +201,18 @@ s32 debugger_printf(u32 level, const char *format, ...)
 				case 'c':
 					{
 						/* charset, aligned by cpu word */
-						*pdest = (char)va_arg(args, int);
+						*pdest++ = (char)va_arg(args, int);
 						break;
 					}
 				case 's':
 					{
-						/* string */
+						/* string, bounded by the remaining buffer */
 						psrc = va_arg(args, char *);
-						strcpy(pdest, psrc);
-						pdest += strlen(psrc);
+						len = strnlen(psrc,
+							     DEBUG_BUFFER_SIZE - 1 -
+							     (pdest - debugger_buffer));
+						strncpy(pdest, psrc, len);
+						pdest += len;
 						break;
 					}
 				default:

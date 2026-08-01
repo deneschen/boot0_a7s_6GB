@@ -133,8 +133,8 @@ s32 uart_init(void)
 	if (uart_pin_not_used)
 		return -EACCES;
 
-	/* set reset as assert state. */
-	ccu_set_mclk_reset(CCU_MOD_CLK_R_UART, CCU_CLK_NRESET),
+	/* set reset as de-assert state. */
+	ccu_set_mclk_reset(CCU_MOD_CLK_R_UART, CCU_CLK_NRESET);
 
 	/* set uart clock, open apb0 uart gating. */
 	ccu_set_mclk_onoff(CCU_MOD_CLK_R_UART, CCU_CLK_ON);

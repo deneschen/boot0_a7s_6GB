@@ -80,6 +80,7 @@ fiptool create --align 512 \
 - DTB 基址不再要求等于 `0x48100000`，改为接受 boot0 发布的 E902 视角 DRAM 地址（`0x40000000–0x7FF00000` 窗口内），仍以 FDT 头校验把关，并防止越界地址触发无 MMU 核的总线错误死循环。
 - 运行时栈由 1 KB 扩大到 4 KB，上移到"仅 CPUS 可用"的 SRAM 顶区（`0x40033000–0x40034000`）。
 - 系统定时器时钟源注释更正为 pll-ref（固定 24 MHz，依赖 REFPLL=24.000 MHz 前提）。
+- 调试打印缓冲区加边界保护：`%s` 按剩余空间截断、整体输出限长（256 字节），并修正 `%c` 不推进指针的缺陷，杜绝未知消息 `hexdump` 路径的缓冲区溢出。
 
 ## 构建与验证
 
@@ -109,10 +110,10 @@ make verify-all
 | 文件 | 大小 | SHA256 |
 |---|---:|---|
 | `build/boot0_sdcard_sun60iw2p1.bin` | 237568 | `e60bcf8586694e4fc81bad9ee20ae4e4b54e588480caf40e9a9bdb1f306a3516` |
-| `build/scp.bin` | 118648 | `d4f5115abaf40e148fd538fc6fba37fccb5bfdfb9f3a67156651d5bd77fef8b3` |
-| `build/scp.elf` | 401812 | `fc7ea7d6953223a1b8a6d36780b1861df8f6c6aa8be32d10af09e13d9dc935a8` |
+| `build/scp.bin` | 118672 | `59cb4ef62bfcbb588dce3d0d228d4b24412a49622892139ecf149594a4c382cf` |
+| `build/scp.elf` | 401824 | `dde1c5c6ba4a902e7d920837d3eb7dcc4134d677aa779a4ae3780e7e96fd1b42` |
 
-AR100S 检查结果为入口 `0x40004000`、文件大小 `118648`、BSS 到栈底余量 `26972` 字节；ELF 为 RV32E/RVC soft-float ABI，且没有 RWX LOAD 段。
+AR100S 检查结果为入口 `0x40004000`、文件大小 `118672`、BSS 到栈底余量 `26820` 字节；ELF 为 RV32E/RVC soft-float ABI，且没有 RWX LOAD 段。
 
 ## 证据边界和剩余工作
 
