@@ -1,1 +1,26 @@
 build/
+tools/__pycache__/
+# build.sh staging copy of blobs/libar100s.a
+ar100s/dramlib/
+ar100s/.config
+ar100s/.config.old
+ar100s/.lib
+ar100s/include/generated/
+ar100s/include/config/
+ar100s/scripts/basic/fixdep
+ar100s/tools/.toolchain.flag
+ar100s/**/*.o
+ar100s/**/.*.cmd
+ar100s/**/.*.d
+ar100s/*.bin
+ar100s/*.elf
+ar100s/*.map
+ar100s/*.raw
+ar100s/*.dis
+ar100s/*.hex
+# Optional local vendor toolchains (default: apt riscv64-unknown-elf-gcc)
+ar100s/tools/riscv64-elf-x86_64-20201104/
+ar100s/tools/or32-elf-gcc/
+ar100s/tools/*.tar.gz
+ar100s/tools/*.tar.bz2
+ar100s/tools/*.tar.xz

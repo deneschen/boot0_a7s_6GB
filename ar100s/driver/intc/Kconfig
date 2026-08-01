@@ -1,0 +1,8 @@
+choice IRQCHIP_IP
+	prompt "Sunxi irqchip to use"
+
+config CLIC_USED
+	bool
+	prompt "clic used"
+
+endchoice

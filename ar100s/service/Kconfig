@@ -1,0 +1,23 @@
+
+menu "Services"
+
+
+config STANDBY_SERVICE
+	def_bool y
+	prompt "Standby service support"
+
+config FDT_USED
+	def_bool y
+	prompt "fdt lib support"
+
+config FDT_INIT_ARISC_PMU_USED
+	def_bool n
+	depends on FDT_USED
+	prompt "init arisc pmu from fdt support"
+
+config FDT_INIT_ARISC_UART_USED
+	def_bool n
+	depends on FDT_USED
+	prompt "init arisc uart from fdt support"
+
+endmenu

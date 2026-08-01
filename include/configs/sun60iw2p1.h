@@ -28,8 +28,6 @@
 #define CONFIG_FIP_STAGING_SIZE           (0x00200000)
 #define CONFIG_FIP_HANDOFF_BASE            (CONFIG_BOOTPKG_BASE - 0x1000)
 #define CONFIG_FIP_HANDOFF_SIZE            (0x1000)
-#define CONFIG_FIP_HANDOFF_PARAM_OFFSET    (0x0800)
-#define CONFIG_FIP_HANDOFF_PARAM_ADDR      (CONFIG_FIP_HANDOFF_BASE + CONFIG_FIP_HANDOFF_PARAM_OFFSET)
 #define CONFIG_MONITOR_BASE               SDRAM_OFFSET(0x08000000)
 #define CONFIG_UBOOT_BASE                 SDRAM_OFFSET(0x0a000000)
 #define SCP_DRAM_BASE                     SDRAM_OFFSET(0x08100000)
@@ -47,15 +45,23 @@
 
 /* scp mem layout */
 #define SCP_DRAM_SIZE                    (0x0000) /* no cpus dram code on sun50iw10 */
-#define SCP_DTS_SIZE                     (0x40000)
+#define SCP_DTS_SIZE                     (0x100000)
 #define SCP_CODE_DRAM_OFFSET		     (0x14000)
 #define SCP_SRAM_BASE                    (CONFIG_SYS_SRAMA2_BASE)
 #define SCP_SRAM_SIZE                    (CONFIG_SYS_SRAMA2_SIZE)
-#define HEADER_OFFSET                    (0x4000)
-/*dram_para_offset is the numbers of u32 before dram data sturcture(dram_para) in struct arisc_para*/
-#define SCP_DRAM_PARA_OFFSET  (2 * 4)
-#define SCP_DARM_PARA_NUM     (32)
-#define SCP_BOOT_PARAM_ADDR   (SCP_SRAM_BASE + HEADER_OFFSET + SCP_DRAM_PARA_OFFSET)
+
+/* Documented A733 E902 clock, configuration, and reset-vector controls. */
+#define SUNXI_RISCV_24M_CLK_REG          (SUNXI_RPRCM_BASE + 0x0210)
+#define SUNXI_RISCV_BGR_REG              (SUNXI_RPRCM_BASE + 0x021c)
+#define SUNXI_E902_RST_START_ADDR_REG    (0x07032000 + 0x0204)
+#define SUNXI_RTC_DTB_BASE_STORE_REG     (SUNXI_RTC_BASE + 0x010c)
+#define SUNXI_E902_RESET_VECTOR          (0x40004000)
+
+#define RISCV_CLK_GATING                 (1U << 31)
+#define RISCV_CLK_SOURCE_MASK            (3U << 24)
+#define RISCV_CFG_RESET                  (1U << 16)
+#define RISCV_CFG_GATING                 (1U << 1)
+#define RISCV_BUS_GATING                 (1U << 0)
 
 
 /* boot run addr */

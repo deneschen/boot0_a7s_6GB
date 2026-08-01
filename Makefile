@@ -13,6 +13,7 @@
 CROSS   ?= $(if $(shell command -v arm-linux-gnueabi-gcc 2>/dev/null),arm-linux-gnueabi-,arm-none-eabi-)
 HOSTCC  ?= cc
 FIPTOOL ?= $(abspath $(TOP)/../arm-trusted-firmware/tools/fiptool/fiptool)
+DTC     ?= dtc
 CC       = $(CROSS)gcc
 LD       = $(CROSS)ld
 OBJCOPY  = $(CROSS)objcopy
@@ -99,12 +100,30 @@ LDS_OUT := $(BUILD)/boot0.lds
 
 NAME := boot0_sdcard_$(PLATFORM)
 FIPTOOL_TEST_IMAGE := $(BUILD)/test_fiptool.bin
+FIPTOOL_TEST_IMAGE_NO_DTB := $(BUILD)/test_fiptool_no_dtb.bin
+FIPTOOL_TEST_DTB := $(BUILD)/test_hw_config.dtb
+SANITIZED_FIP_TEST := $(BUILD)/test_sunxi_fip_sanitize
 
-.PHONY: all clean test test-fiptool verify
+.PHONY: all clean test test-sanitize test-fiptool verify scp scp-clean verify-all
 all: $(BUILD)/$(NAME).bin
+
+# ---- AR100S / SCP firmware --------------------------------------------------
+# Transplant of u-boot-aw2501/arisc/ar100s, built the same way as
+# device-a733/*/scp.bin (sun60iw2p1_defconfig + LICHEE_DRAMLIB_PATH).
+# Output: ar100s/scp.bin and a staged copy at build/scp.bin (FIP SCP_BL2).
+scp: | $(BUILD)
+	$(TOP)/ar100s/build.sh
+	@test -f $(BUILD)/scp.bin
+
+scp-clean:
+	-$(TOP)/ar100s/build.sh clean
+	rm -f $(BUILD)/scp.bin $(BUILD)/scp.elf
 
 test: $(BUILD)/test_sunxi_fip
 	$<
+
+test-sanitize: $(SANITIZED_FIP_TEST)
+	ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 $<
 
 $(BUILD)/test_sunxi_fip: $(TOP)/tests/test_sunxi_fip.c \
 				 $(TOP)/src/sunxi_fip.c \
@@ -113,16 +132,38 @@ $(BUILD)/test_sunxi_fip: $(TOP)/tests/test_sunxi_fip.c \
 		-I$(TOP)/include -I$(TOP)/include/arch/arm -o $@ \
 		$(TOP)/tests/test_sunxi_fip.c $(TOP)/src/sunxi_fip.c
 
+$(SANITIZED_FIP_TEST): $(TOP)/tests/test_sunxi_fip.c \
+				$(TOP)/src/sunxi_fip.c \
+				$(TOP)/include/sunxi_fip.h | $(BUILD)
+	$(HOSTCC) -std=c11 -Wall -Wextra -Werror -O1 -g \
+		-fsanitize=address,undefined -fno-omit-frame-pointer \
+		-I$(TOP)/include -I$(TOP)/include/arch/arm -o $@ \
+		$(TOP)/tests/test_sunxi_fip.c $(TOP)/src/sunxi_fip.c
+
 ifneq ($(wildcard $(FIPTOOL)),)
 $(FIPTOOL_TEST_IMAGE): $(BUILD)/test_sunxi_fip \
-			       $(TOP)/tests/test_sunxi_fip.c $(FIPTOOL) | $(BUILD)
+			       $(TOP)/tests/test_sunxi_fip.c \
+			       $(FIPTOOL_TEST_DTB) $(FIPTOOL) | $(BUILD)
+	$(FIPTOOL) create --align 512 \
+		--scp-fw $(TOP)/tests/test_sunxi_fip.c \
+		--soc-fw $(TOP)/tests/test_sunxi_fip.c \
+		--nt-fw $(TOP)/tests/test_sunxi_fip.c \
+		--hw-config $(FIPTOOL_TEST_DTB) $@
+
+$(FIPTOOL_TEST_IMAGE_NO_DTB): $(BUILD)/test_sunxi_fip \
+				      $(TOP)/tests/test_sunxi_fip.c \
+				      $(FIPTOOL) | $(BUILD)
 	$(FIPTOOL) create --align 512 \
 		--scp-fw $(TOP)/tests/test_sunxi_fip.c \
 		--soc-fw $(TOP)/tests/test_sunxi_fip.c \
 		--nt-fw $(TOP)/tests/test_sunxi_fip.c $@
 
-test-fiptool: test $(FIPTOOL_TEST_IMAGE)
+$(FIPTOOL_TEST_DTB): $(TOP)/tests/test_hw_config.dts | $(BUILD)
+	$(DTC) -I dts -O dtb -o $@ $<
+
+test-fiptool: test $(FIPTOOL_TEST_IMAGE) $(FIPTOOL_TEST_IMAGE_NO_DTB)
 	$(BUILD)/test_sunxi_fip $(FIPTOOL_TEST_IMAGE)
+	$(BUILD)/test_sunxi_fip $(FIPTOOL_TEST_IMAGE_NO_DTB)
 else
 test-fiptool: test
 	@echo "SKIP: TF-A fiptool not found at $(FIPTOOL)"
@@ -183,11 +224,17 @@ $(BUILD)/$(NAME).bin: $(BUILD)/boot0.bin
 $(BUILD):
 	@mkdir -p $(BUILD)
 
-verify: all test-fiptool
+verify: all test-fiptool test-sanitize
 	@echo "=== ELF arch ==="; $(OBJDUMP) -f $(BUILD)/boot0.elf | head
 	@echo "=== size ==="; ls -l $(BUILD)/$(NAME).bin
 	@echo "=== entry head (first 32 bytes) ==="; xxd -l 32 $(BUILD)/$(NAME).bin
 	@python3 $(TOP)/tools/check_a7s_boot0.py $(BUILD)/$(NAME).bin $(BUILD)/boot0.map
 
-clean:
+# boot0 + SCP firmware (A7S FIP ingredients)
+verify-all: verify scp
+	@echo "=== SCP ==="; file $(BUILD)/scp.bin $(TOP)/ar100s/scp.elf
+	@ls -l $(BUILD)/scp.bin $(TOP)/ar100s/scp.bin
+	@$(TOP)/tools/check_ar100s.py --staged $(BUILD)/scp.bin
+
+clean: scp-clean
 	rm -rf $(BUILD)

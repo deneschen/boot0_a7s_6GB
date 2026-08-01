@@ -34,12 +34,28 @@
 #if SCP_SRAM_BASE != SUNXI_FIP_SCP_BL2_BASE
 #error "A733 SCP_BL2 address does not match the FIP copy policy"
 #endif
+#if SCP_SRAM_SIZE != SUNXI_FIP_SCP_BL2_MAX_SIZE
+#error "A733 SCP_BL2 size does not match the SRAM copy window"
+#endif
+#if SCP_DTS_BASE != SUNXI_FIP_HW_CONFIG_BASE
+#error "A733 SCP DTB address does not match the FIP copy policy"
+#endif
+#if SCP_DTS_SIZE != SUNXI_FIP_HW_CONFIG_MAX_SIZE
+#error "A733 SCP DTB size does not match the little-endian access window"
+#endif
+#if SUNXI_FIP_BL31_BASE + SUNXI_FIP_BL31_MAX_SIZE > SUNXI_FIP_HW_CONFIG_BASE
+#error "A733 BL31 and HW_CONFIG load windows overlap"
+#endif
+#if SUNXI_FIP_HW_CONFIG_BASE + SUNXI_FIP_HW_CONFIG_MAX_SIZE > SUNXI_FIP_BL33_BASE
+#error "A733 HW_CONFIG and BL33 load windows overlap"
+#endif
 
 __u8 uboot_backup;
 
 struct fip_boot_images {
 	const void *scp_source;
 	u32 scp_size;
+	u32 dtb_base;
 };
 
 extern const u8 fip_handoff_start[];
@@ -184,6 +200,8 @@ static int fip_copy_image(u32 destination, const void *source, size_t size,
 	}
 
 	memcpy((void *)(phys_addr_t)destination, source, size);
+	if (destination == SUNXI_FIP_HW_CONFIG_BASE)
+		images->dtb_base = destination;
 	return 0;
 }
 
@@ -230,7 +248,7 @@ static int load_fip_images(phys_addr_t *uboot_base,
 }
 
 typedef void (*fip_handoff_fn)(const void *scp_source, u32 scp_size,
-			       const void *dram_parameters);
+			       u32 dtb_base);
 
 static void invalidate_instruction_cache(void)
 {
@@ -249,26 +267,20 @@ static int run_fip_handoff(const struct fip_boot_images *images)
 {
 	size_t handoff_size = fip_handoff_end - fip_handoff_start;
 	fip_handoff_fn handoff;
-	void *dram_parameters =
-		(void *)(phys_addr_t)CONFIG_FIP_HANDOFF_PARAM_ADDR;
 
 	if (!images->scp_source || !images->scp_size ||
-	    handoff_size > CONFIG_FIP_HANDOFF_PARAM_OFFSET ||
-	    CONFIG_FIP_HANDOFF_PARAM_OFFSET +
-		SCP_DARM_PARA_NUM * sizeof(u32) > CONFIG_FIP_HANDOFF_SIZE) {
+	    handoff_size > CONFIG_FIP_HANDOFF_SIZE) {
 		printf("FIP: invalid handoff layout\n");
 		return -1;
 	}
 
 	memcpy((void *)(phys_addr_t)CONFIG_FIP_HANDOFF_BASE,
 	       fip_handoff_start, handoff_size);
-	memcpy(dram_parameters, (void *)sunxi_bootparam_get_dram_buf(),
-	       SCP_DARM_PARA_NUM * sizeof(u32));
 	v7_flush_dcache_all();
 	invalidate_instruction_cache();
 
 	handoff = (fip_handoff_fn)(phys_addr_t)(CONFIG_FIP_HANDOFF_BASE | 1U);
-	handoff(images->scp_source, images->scp_size, dram_parameters);
+	handoff(images->scp_source, images->scp_size, images->dtb_base);
 	return -1;
 }
 

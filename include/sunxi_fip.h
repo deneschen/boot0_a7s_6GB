@@ -11,6 +11,8 @@
 #define SUNXI_FIP_BL33_MAX_SIZE 0x00180000U
 #define SUNXI_FIP_SCP_BL2_BASE 0x00044000U
 #define SUNXI_FIP_SCP_BL2_MAX_SIZE 0x00028000U
+#define SUNXI_FIP_HW_CONFIG_BASE 0x48100000U
+#define SUNXI_FIP_HW_CONFIG_MAX_SIZE 0x00100000U
 
 struct sunxi_fip_image {
 	size_t offset;
@@ -21,6 +23,7 @@ struct sunxi_fip_layout {
 	struct sunxi_fip_image scp_bl2;
 	struct sunxi_fip_image bl31;
 	struct sunxi_fip_image bl33;
+	struct sunxi_fip_image hw_config;
 };
 
 typedef int (*sunxi_fip_copy_fn)(u32 destination, const void *source,

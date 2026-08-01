@@ -13,8 +13,14 @@
 #define FIP_FOUND_SCP_BL2 0x1U
 #define FIP_FOUND_BL31 0x2U
 #define FIP_FOUND_BL33 0x4U
+#define FIP_FOUND_HW_CONFIG 0x8U
 #define FIP_FOUND_REQUIRED (FIP_FOUND_SCP_BL2 | FIP_FOUND_BL31 | \
-			    FIP_FOUND_BL33)
+				    FIP_FOUND_BL33)
+
+#define FDT_MAGIC 0xd00dfeedU
+#define FDT_HEADER_SIZE 40U
+#define FDT_FIRST_SUPPORTED_VERSION 16U
+#define FDT_LAST_SUPPORTED_VERSION 17U
 
 static const u8 scp_bl2_uuid[16] = {
 	0x97, 0x66, 0xfd, 0x3d, 0x89, 0xbe, 0xe8, 0x49,
@@ -31,6 +37,11 @@ static const u8 bl33_uuid[16] = {
 	0x97, 0x82, 0x99, 0x34, 0xf2, 0x34, 0xb6, 0xe4,
 };
 
+static const u8 hw_config_uuid[16] = {
+	0x08, 0xb8, 0xf1, 0xd9, 0xc9, 0xcf, 0x93, 0x49,
+	0xa9, 0x62, 0x6f, 0xbc, 0x6b, 0x72, 0x65, 0xcc,
+};
+
 static u32 get_le32(const u8 *src)
 {
 	return (u32)src[0] | ((u32)src[1] << 8) |
@@ -45,6 +56,47 @@ static u64 get_le64(const u8 *src)
 	for (i = 0; i < 8; i++)
 		value |= (u64)src[i] << (i * 8);
 	return value;
+}
+
+static u32 get_be32(const u8 *src)
+{
+	return ((u32)src[0] << 24) | ((u32)src[1] << 16) |
+	       ((u32)src[2] << 8) | (u32)src[3];
+}
+
+static int hw_config_is_valid(const u8 *fdt, size_t image_size)
+{
+	u32 total_size;
+	u32 struct_offset;
+	u32 strings_offset;
+	u32 reserve_offset;
+	u32 version;
+	u32 last_compatible_version;
+	u32 strings_size;
+	u32 struct_size;
+
+	if (!fdt || image_size < FDT_HEADER_SIZE || get_be32(fdt) != FDT_MAGIC)
+		return 0;
+
+	total_size = get_be32(fdt + 4);
+	struct_offset = get_be32(fdt + 8);
+	strings_offset = get_be32(fdt + 12);
+	reserve_offset = get_be32(fdt + 16);
+	version = get_be32(fdt + 20);
+	last_compatible_version = get_be32(fdt + 24);
+	strings_size = get_be32(fdt + 32);
+	struct_size = get_be32(fdt + 36);
+
+	return total_size == image_size && total_size >= FDT_HEADER_SIZE &&
+	       version >= FDT_FIRST_SUPPORTED_VERSION &&
+	       version <= FDT_LAST_SUPPORTED_VERSION &&
+	       last_compatible_version <= FDT_LAST_SUPPORTED_VERSION &&
+	       reserve_offset >= FDT_HEADER_SIZE && !(reserve_offset & 7U) &&
+	       reserve_offset <= total_size - 16U &&
+	       struct_offset >= FDT_HEADER_SIZE && struct_offset <= total_size &&
+	       struct_size <= total_size - struct_offset &&
+	       strings_offset >= FDT_HEADER_SIZE && strings_offset <= total_size &&
+	       strings_size <= total_size - strings_offset;
 }
 
 static int uuid_equal(const u8 *left, const u8 *right)
@@ -122,7 +174,8 @@ int sunxi_fip_parse(const void *image, size_t image_size,
 	u64 payload_start = ~0ULL;
 	u64 payload_end = 0;
 
-	if (!bytes || !layout || image_size < FIP_HEADER_SIZE)
+	if (!bytes || !layout || image_size < FIP_HEADER_SIZE ||
+	    image_size > SUNXI_FIP_MAX_SIZE)
 		return -1;
 	if (get_le32(bytes) != FIP_TOC_HEADER_NAME ||
 	    get_le32(bytes + 4) != FIP_TOC_SERIAL_NUMBER)
@@ -134,6 +187,8 @@ int sunxi_fip_parse(const void *image, size_t image_size,
 	layout->bl31.size = 0;
 	layout->bl33.offset = 0;
 	layout->bl33.size = 0;
+	layout->hw_config.offset = 0;
+	layout->hw_config.size = 0;
 
 	entry_offset = FIP_HEADER_SIZE;
 	for (entry_count = 0; entry_count < FIP_MAX_TOC_ENTRIES; entry_count++) {
@@ -152,7 +207,13 @@ int sunxi_fip_parse(const void *image, size_t image_size,
 			    fip_size > image_size || fip_size < metadata_end ||
 			    payload_start < metadata_end || payload_end > fip_size)
 				return -1;
-			return found == FIP_FOUND_REQUIRED ? 0 : -1;
+			if ((found & FIP_FOUND_REQUIRED) != FIP_FOUND_REQUIRED)
+				return -1;
+			if ((found & FIP_FOUND_HW_CONFIG) &&
+			    !hw_config_is_valid(bytes + layout->hw_config.offset,
+						layout->hw_config.size))
+				return -1;
+			return 0;
 		}
 		if (entry_uuid_seen(bytes, entry, entry_count))
 			return -1;
@@ -174,6 +235,9 @@ int sunxi_fip_parse(const void *image, size_t image_size,
 		} else if (uuid_equal(entry, bl33_uuid)) {
 			set_image(&layout->bl33, entry);
 			found |= FIP_FOUND_BL33;
+		} else if (uuid_equal(entry, hw_config_uuid)) {
+			set_image(&layout->hw_config, entry);
+			found |= FIP_FOUND_HW_CONFIG;
 		}
 
 		entry_offset += FIP_ENTRY_SIZE;
@@ -186,7 +250,8 @@ static int layout_is_loadable(const struct sunxi_fip_layout *layout)
 {
 	return layout->bl31.size <= SUNXI_FIP_BL31_MAX_SIZE &&
 	       layout->bl33.size <= SUNXI_FIP_BL33_MAX_SIZE &&
-	       layout->scp_bl2.size <= SUNXI_FIP_SCP_BL2_MAX_SIZE;
+	       layout->scp_bl2.size <= SUNXI_FIP_SCP_BL2_MAX_SIZE &&
+	       layout->hw_config.size <= SUNXI_FIP_HW_CONFIG_MAX_SIZE;
 }
 
 int sunxi_fip_copy_images(const void *image, size_t image_size,
@@ -203,6 +268,11 @@ int sunxi_fip_copy_images(const void *image, size_t image_size,
 		return -1;
 	if (copy(SUNXI_FIP_BL33_BASE, bytes + layout.bl33.offset,
 		 layout.bl33.size, context) != 0)
+		return -1;
+	if (layout.hw_config.size &&
+	    copy(SUNXI_FIP_HW_CONFIG_BASE,
+		 bytes + layout.hw_config.offset,
+		 layout.hw_config.size, context) != 0)
 		return -1;
 	if (copy(SUNXI_FIP_SCP_BL2_BASE, bytes + layout.scp_bl2.offset,
 		 layout.scp_bl2.size, context) != 0)
