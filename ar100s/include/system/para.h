@@ -2,7 +2,6 @@
 #define __ARISC_PARA_H__
 
 #include "../driver/dram.h"
-#include "../driver/ir.h"
 #include "../driver/pmu.h"
 #include "../service/standby.h"
 
