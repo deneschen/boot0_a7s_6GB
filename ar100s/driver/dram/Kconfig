@@ -1,0 +1,57 @@
+
+#source "driver/dram/dram-sun50iw6p1/Kconfig"
+
+menuconfig DRAMFREQ_USED
+	bool
+	prompt "DRAM Freq used"
+
+menuconfig DRAM_PARA_EXTEND_USED
+	bool
+	prompt "DRAM para extend used"
+	default n
+
+config DRAM_DTS_PARA_V2
+	bool
+	prompt "DRAM dts para V2 used"
+
+config HAVE_DDR_SEL_SUPPORT
+	bool
+
+config HAVE_DDR3_SUPPORT
+	bool
+
+config HAVE_DDR4_SUPPORT
+	bool
+
+config HAVE_LRDDR3_SUPPORT
+	bool
+
+config HAVE_LRDDR4_SUPPORT
+	bool
+
+config DRAM_PARA_V2
+	bool
+	prompt "DRAM para v2 used"
+	default n
+
+choice DDR_TYPE
+	prompt  "DDR type used"
+	depends on HAVE_DDR_SEL_SUPPORT
+
+	config DDR3
+	bool "ddr3"
+	depends on HAVE_DDR3_SUPPORT
+
+	config DDR4
+	bool "ddr4"
+	depends on HAVE_DDR4_SUPPORT
+
+	config LRDDR3
+	bool "lpddr3"
+	depends on HAVE_LRDDR3_SUPPORT
+
+	config LRDDR4
+	bool "lpddr4"
+	depends on HAVE_LRDDR4_SUPPORT
+
+endchoice

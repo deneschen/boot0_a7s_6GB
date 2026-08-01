@@ -12,13 +12,32 @@
 fip_handoff_start:
 	mov	r6, r0
 	mov	r7, r1
-	mov	r8, r2
+	mov	r8, r2			/* validated HW_CONFIG address */
 
 	/* Hold AR100S in reset before replacing its SRAM image. */
 	ldr	r3, =SUNXI_RCPUCFG_BASE
 	ldr	r4, [r3]
 	bic	r4, r4, #1
 	dmb	sy
+	str	r4, [r3]
+	dsb	sy
+
+	/* Enable the documented E902 clock and configuration bus. */
+	ldr	r3, =SUNXI_RISCV_24M_CLK_REG
+	ldr	r4, [r3]
+	bic	r4, r4, #RISCV_CLK_SOURCE_MASK
+	orr	r4, r4, #RISCV_CLK_GATING
+	str	r4, [r3]
+	dsb	sy
+
+	/* Keep configuration reset asserted while opening both bus gates. */
+	ldr	r3, =SUNXI_RISCV_BGR_REG
+	ldr	r4, [r3]
+	bic	r4, r4, #RISCV_CFG_RESET
+	orr	r4, r4, #(RISCV_CFG_GATING | RISCV_BUS_GATING)
+	str	r4, [r3]
+	dsb	sy
+	orr	r4, r4, #RISCV_CFG_RESET
 	str	r4, [r3]
 	dsb	sy
 
@@ -39,14 +58,13 @@ fip_handoff_start:
 	subs	r7, r7, #1
 	b	2b
 
-3:
-	ldr	r3, =SCP_BOOT_PARAM_ADDR
-	movs	r5, #SCP_DARM_PARA_NUM
-4:
-	ldr	r4, [r8], #4
-	str	r4, [r3], #4
-	subs	r5, r5, #1
-	bne	4b
+	3:
+	/* Publish immutable startup inputs before releasing the E902 reset. */
+	ldr	r3, =SUNXI_RTC_DTB_BASE_STORE_REG
+	str	r8, [r3]
+	ldr	r3, =SUNXI_E902_RST_START_ADDR_REG
+	ldr	r4, =SUNXI_E902_RESET_VECTOR
+	str	r4, [r3]
 
 	dsb	sy
 	isb	sy
@@ -83,9 +101,9 @@ fip_handoff_start:
 	dsb	sy
 	mcr	p15, 0, r2, c12, c0, 2
 	isb	sy
-5:
+	4:
 	wfi
-	b	5b
+	b	4b
 
 	.ltorg
 fip_handoff_end:

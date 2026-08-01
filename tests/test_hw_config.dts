@@ -1,0 +1,5 @@
+/dts-v1/;
+
+/ {
+	compatible = "test,a733-ar100s-hw-config";
+};

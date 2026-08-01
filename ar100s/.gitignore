@@ -1,0 +1,24 @@
+*.o
+*.o.cmd
+# Optional local vendor toolchain tree (not required; use apt packages)
+riscv64-elf-x86_64-20201104/
+or32-elf-gcc/
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.dis
+*.elf
+*.hex
+*.bin
+*.raw
+*.map
+*/autoconf.h
+*/ram.ld
+.config
+.config.old
+include/generated/
+include/config/
+tags
+cscope.out
+scripts/basic/fixdep
+tools/.toolchain.flag

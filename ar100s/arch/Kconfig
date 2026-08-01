@@ -1,0 +1,49 @@
+
+config CPUX_ARM32
+	bool
+
+config CPUX_ARM64
+	bool
+
+config OPENRISC
+	bool
+
+config RISCV
+	bool
+
+config AR100S_OS
+	bool
+
+choice PLATFORM
+	prompt "Sunxi-chip to use"
+	help
+	the ic we use for build
+
+config SUN60IW2P1
+	bool
+	imply CPUX_ARM64
+	select RISCV
+	select AR100S_OS
+	prompt "AW1903 sun60iw2p1 A733 platform"
+
+endchoice
+
+choice PLATFORM_SELECT
+	prompt "Platform used"
+
+config EVB_PLATFORM
+	bool "evb platfrom used"
+
+config FPGA_PLATFORM
+	bool "fpga platform used"
+
+endchoice
+
+config CHIP_PLATFORM
+	string "The name of SUNXI CHIP"
+	default "sun60iw2p1" if SUN60IW2P1
+
+config ARCH_PLATFORM
+	string "The name of SUNXI ARCH"
+	default "openrisc" if OPENRISC
+	default "riscv" if RISCV

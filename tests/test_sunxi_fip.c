@@ -7,6 +7,7 @@
 #define FIP_SIZE 512U
 #define FIP_HEADER_SIZE 16U
 #define FIP_ENTRY_SIZE 40U
+#define TEST_FDT_SIZE 64U
 
 struct copy_call {
 	unsigned int destination;
@@ -15,7 +16,7 @@ struct copy_call {
 };
 
 struct copy_log {
-	struct copy_call calls[3];
+	struct copy_call calls[4];
 	unsigned int count;
 	unsigned int fail_on_call;
 };
@@ -49,6 +50,11 @@ static const unsigned char bl33_uuid[16] = {
 	0x97, 0x82, 0x99, 0x34, 0xf2, 0x34, 0xb6, 0xe4,
 };
 
+static const unsigned char hw_config_uuid[16] = {
+	0x08, 0xb8, 0xf1, 0xd9, 0xc9, 0xcf, 0x93, 0x49,
+	0xa9, 0x62, 0x6f, 0xbc, 0x6b, 0x72, 0x65, 0xcc,
+};
+
 static void put_le32(unsigned char *dst, unsigned int value)
 {
 	dst[0] = value;
@@ -63,6 +69,29 @@ static void put_le64(unsigned char *dst, unsigned long long value)
 
 	for (i = 0; i < 8; i++)
 		dst[i] = value >> (i * 8);
+}
+
+static void put_be32(unsigned char *dst, unsigned int value)
+{
+	dst[0] = value >> 24;
+	dst[1] = value >> 16;
+	dst[2] = value >> 8;
+	dst[3] = value;
+}
+
+static void put_valid_fdt(unsigned char *fdt, size_t size)
+{
+	memset(fdt, 0, size);
+	put_be32(fdt, 0xd00dfeedU);
+	put_be32(fdt + 4, (unsigned int)size);
+	put_be32(fdt + 8, 56);
+	put_be32(fdt + 12, 60);
+	put_be32(fdt + 16, 40);
+	put_be32(fdt + 20, 17);
+	put_be32(fdt + 24, 16);
+	put_be32(fdt + 32, 1);
+	put_be32(fdt + 36, 4);
+	put_be32(fdt + 56, 9); /* FDT_END */
 }
 
 static void put_entry(unsigned char *entry, const unsigned char uuid[16],
@@ -81,16 +110,21 @@ static void make_valid_fip(unsigned char image[FIP_SIZE])
 	put_entry(image + FIP_HEADER_SIZE, scp_bl2_uuid, 256, 4);
 	put_entry(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE, bl31_uuid, 320, 5);
 	put_entry(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 2, bl33_uuid, 384, 6);
-	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 3 + 16, FIP_SIZE);
+	put_entry(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 3,
+		  hw_config_uuid, 448, TEST_FDT_SIZE);
+	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 16, FIP_SIZE);
+	put_valid_fdt(image + 448, TEST_FDT_SIZE);
 }
 
 static unsigned char *make_sized_fip(size_t scp_size, size_t bl31_size,
-				    size_t bl33_size, size_t *image_size)
+				    size_t bl33_size, size_t hw_config_size,
+				    size_t *image_size)
 {
 	size_t scp_offset = 512;
 	size_t bl31_offset = (scp_offset + scp_size + 511) & ~(size_t)511;
 	size_t bl33_offset = (bl31_offset + bl31_size + 511) & ~(size_t)511;
-	size_t fip_size = (bl33_offset + bl33_size + 511) & ~(size_t)511;
+	size_t hw_config_offset = (bl33_offset + bl33_size + 511) & ~(size_t)511;
+	size_t fip_size = (hw_config_offset + hw_config_size + 511) & ~(size_t)511;
 	unsigned char *image = calloc(1, fip_size);
 
 	if (!image) {
@@ -104,7 +138,11 @@ static unsigned char *make_sized_fip(size_t scp_size, size_t bl31_size,
 		  bl31_uuid, bl31_offset, bl31_size);
 	put_entry(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 2,
 		  bl33_uuid, bl33_offset, bl33_size);
-	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 3 + 16, fip_size);
+	put_entry(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 3,
+		  hw_config_uuid, hw_config_offset, hw_config_size);
+	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 16, fip_size);
+	if (hw_config_size >= TEST_FDT_SIZE)
+		put_valid_fdt(image + hw_config_offset, hw_config_size);
 	*image_size = fip_size;
 	return image;
 }
@@ -157,10 +195,11 @@ static int verify_fip_file(const char *path)
 		goto out;
 	}
 
-	printf("SCP_BL2=%zu/%zu BL31=%zu/%zu BL33=%zu/%zu\n",
+	printf("SCP_BL2=%zu/%zu BL31=%zu/%zu BL33=%zu/%zu HW_CONFIG=%zu/%zu\n",
 	       layout.scp_bl2.offset, layout.scp_bl2.size,
 	       layout.bl31.offset, layout.bl31.size,
-	       layout.bl33.offset, layout.bl33.size);
+	       layout.bl33.offset, layout.bl33.size,
+	       layout.hw_config.offset, layout.hw_config.size);
 	status = EXIT_SUCCESS;
 out:
 	free(image);
@@ -173,7 +212,7 @@ static int record_copy(unsigned int destination, const void *source,
 {
 	struct copy_log *log = context;
 
-	if (log->count >= 3)
+	if (log->count >= 4)
 		return -1;
 	log->calls[log->count].destination = destination;
 	log->calls[log->count].source = source;
@@ -238,11 +277,12 @@ int main(int argc, char **argv)
 	require_image("SCP_BL2", &layout.scp_bl2, 256, 4);
 	require_image("BL31", &layout.bl31, 320, 5);
 	require_image("BL33", &layout.bl33, 384, 6);
+	require_image("HW_CONFIG", &layout.hw_config, 448, TEST_FDT_SIZE);
 
 	make_valid_fip(image);
-	put_entry(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 3,
+	put_entry(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4,
 		  bl31_uuid, 400, 4);
-	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 16,
+	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 5 + 16,
 		 FIP_SIZE);
 	require_rejected("duplicate BL31", image, sizeof(image));
 
@@ -252,7 +292,7 @@ int main(int argc, char **argv)
 	require_rejected("BL31 outside FIP buffer", image, sizeof(image));
 
 	make_valid_fip(image);
-	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 3 + 16, 389);
+	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 16, 389);
 	require_rejected("payload beyond FIP end marker", image, sizeof(image));
 
 	make_valid_fip(image);
@@ -273,10 +313,34 @@ int main(int argc, char **argv)
 	require_rejected("missing BL33", image, sizeof(image));
 
 	make_valid_fip(image);
-	image[FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 3] = 0x5a;
-	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 3 + 16, 400);
-	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 3 + 24, 1);
-	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 16,
+	image[FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 3] ^= 0xff;
+	if (sunxi_fip_parse(image, sizeof(image), &layout) != 0 ||
+	    layout.hw_config.size != 0) {
+		fprintf(stderr, "FIP without optional HW_CONFIG was rejected\n");
+		return EXIT_FAILURE;
+	}
+	{
+		struct copy_log log = { 0 };
+
+		if (sunxi_fip_copy_images(image, sizeof(image), record_copy, &log) != 0 ||
+		    log.count != 3) {
+			fprintf(stderr, "FIP without HW_CONFIG was not copied safely\n");
+			return EXIT_FAILURE;
+		}
+		require_copy(&log, 0, SUNXI_FIP_BL31_BASE, image + 320, 5);
+		require_copy(&log, 1, SUNXI_FIP_BL33_BASE, image + 384, 6);
+		require_copy(&log, 2, SUNXI_FIP_SCP_BL2_BASE, image + 256, 4);
+	}
+
+	make_valid_fip(image);
+	image[448] = 0;
+	require_rejected("invalid HW_CONFIG FDT", image, sizeof(image));
+
+	make_valid_fip(image);
+	image[FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4] = 0x5a;
+	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 16, 400);
+	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 24, 1);
+	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 5 + 16,
 		 FIP_SIZE);
 	if (sunxi_fip_parse(image, sizeof(image), &layout) != 0) {
 		fprintf(stderr, "FIP with an unknown optional entry was rejected\n");
@@ -284,13 +348,13 @@ int main(int argc, char **argv)
 	}
 
 	make_valid_fip(image);
-	image[FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 3] = 0x5a;
-	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 3 + 16, 400);
-	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 3 + 24, 1);
 	image[FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4] = 0x5a;
-	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 16, 402);
+	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 16, 400);
 	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 24, 1);
-	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 5 + 16,
+	image[FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 5] = 0x5a;
+	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 5 + 16, 402);
+	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 5 + 24, 1);
+	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 6 + 16,
 		 FIP_SIZE);
 	require_rejected("duplicate unknown UUID", image, sizeof(image));
 
@@ -305,13 +369,16 @@ int main(int argc, char **argv)
 			  bl31_uuid, 1540, 5);
 		put_entry(large_image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 2,
 			  bl33_uuid, 1545, 6);
-		for (i = 3; i < 32; i++) {
+		put_entry(large_image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 3,
+			  hw_config_uuid, 1552, TEST_FDT_SIZE);
+		put_valid_fdt(large_image + 1552, TEST_FDT_SIZE);
+		for (i = 4; i < 32; i++) {
 			unsigned char *entry = large_image + FIP_HEADER_SIZE +
 					       FIP_ENTRY_SIZE * i;
 
 			entry[0] = 0xa5;
 			entry[1] = i;
-			put_le64(entry + 16, 1600 + (i - 3) * 2);
+			put_le64(entry + 16, 1640 + (i - 4) * 2);
 			put_le64(entry + 24, 1);
 		}
 		put_le64(large_image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 32 + 16,
@@ -330,13 +397,15 @@ int main(int argc, char **argv)
 			fprintf(stderr, "valid FIP images were not copied\n");
 			return EXIT_FAILURE;
 		}
-		if (log.count != 3) {
-			fprintf(stderr, "got %u copy calls, expected 3\n", log.count);
+		if (log.count != 4) {
+			fprintf(stderr, "got %u copy calls, expected 4\n", log.count);
 			return EXIT_FAILURE;
 		}
 		require_copy(&log, 0, SUNXI_FIP_BL31_BASE, image + 320, 5);
 		require_copy(&log, 1, SUNXI_FIP_BL33_BASE, image + 384, 6);
-		require_copy(&log, 2, SUNXI_FIP_SCP_BL2_BASE, image + 256, 4);
+		require_copy(&log, 2, SUNXI_FIP_HW_CONFIG_BASE, image + 448,
+			     TEST_FDT_SIZE);
+		require_copy(&log, 3, SUNXI_FIP_SCP_BL2_BASE, image + 256, 4);
 	}
 
 	{
@@ -358,6 +427,7 @@ int main(int argc, char **argv)
 		size_t sized_fip_size;
 		unsigned char *sized_fip =
 			make_sized_fip(1, SUNXI_FIP_BL31_MAX_SIZE + 1, 1,
+				       TEST_FDT_SIZE,
 				       &sized_fip_size);
 
 		if (sunxi_fip_copy_images(sized_fip, sized_fip_size,
@@ -379,6 +449,7 @@ int main(int argc, char **argv)
 		size_t sized_fip_size;
 		unsigned char *sized_fip =
 			make_sized_fip(1, 1, SUNXI_FIP_BL33_MAX_SIZE + 1,
+				       TEST_FDT_SIZE,
 				       &sized_fip_size);
 
 		if (sunxi_fip_copy_images(sized_fip, sized_fip_size,
@@ -400,6 +471,7 @@ int main(int argc, char **argv)
 		size_t sized_fip_size;
 		unsigned char *sized_fip =
 			make_sized_fip(SUNXI_FIP_SCP_BL2_MAX_SIZE + 1, 1, 1,
+				       TEST_FDT_SIZE,
 				       &sized_fip_size);
 
 		if (sunxi_fip_copy_images(sized_fip, sized_fip_size,
@@ -420,14 +492,29 @@ int main(int argc, char **argv)
 		struct copy_log log = { 0 };
 		size_t sized_fip_size;
 		unsigned char *sized_fip =
-			make_sized_fip(SUNXI_FIP_SCP_BL2_MAX_SIZE,
-				       SUNXI_FIP_BL31_MAX_SIZE,
-				       SUNXI_FIP_BL33_MAX_SIZE,
+			make_sized_fip(1, 1, 1,
+				       SUNXI_FIP_HW_CONFIG_MAX_SIZE + 1,
 				       &sized_fip_size);
 
 		if (sunxi_fip_copy_images(sized_fip, sized_fip_size,
-					  record_copy, &log) != 0 || log.count != 3) {
-			fprintf(stderr, "maximum-sized FIP images were rejected\n");
+					  record_copy, &log) == 0 || log.count != 0) {
+			fprintf(stderr, "oversized HW_CONFIG was copied\n");
+			free(sized_fip);
+			return EXIT_FAILURE;
+		}
+		free(sized_fip);
+	}
+
+	{
+		struct copy_log log = { 0 };
+		size_t sized_fip_size;
+		unsigned char *sized_fip =
+			make_sized_fip(0x1000, 0x40000, 0x80000,
+				       TEST_FDT_SIZE, &sized_fip_size);
+
+		if (sunxi_fip_copy_images(sized_fip, sized_fip_size,
+					  record_copy, &log) != 0 || log.count != 4) {
+			fprintf(stderr, "valid multi-image FIP was rejected\n");
 			free(sized_fip);
 			return EXIT_FAILURE;
 		}
@@ -527,7 +614,7 @@ int main(int argc, char **argv)
 		size_t loaded_size = 0;
 
 		make_valid_fip(disk_data + 512);
-		put_le64(disk_data + 512 + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 3 + 16,
+		put_le64(disk_data + 512 + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 16,
 			 513);
 		if (sunxi_fip_read_image(1, staging, sizeof(staging), fake_read,
 					 &disk, &loaded_size) != 0 ||
@@ -571,7 +658,7 @@ int main(int argc, char **argv)
 			return EXIT_FAILURE;
 		}
 		make_valid_fip(disk_data);
-		put_le64(disk_data + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 3 + 16,
+		put_le64(disk_data + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 16,
 			 SUNXI_FIP_MAX_SIZE + 1);
 		if (sunxi_fip_read_image(0, staging, 0x200200, fake_read,
 					 &disk, &loaded_size) == 0 ||
@@ -599,7 +686,7 @@ int main(int argc, char **argv)
 			return EXIT_FAILURE;
 		}
 		make_valid_fip(disk_data);
-		put_le64(disk_data + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 3 + 16,
+		put_le64(disk_data + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 16,
 			 SUNXI_FIP_MAX_SIZE);
 		if (sunxi_fip_read_image(0, staging, SUNXI_FIP_MAX_SIZE, fake_read,
 					 &disk, &loaded_size) != 0 ||
@@ -757,14 +844,16 @@ int main(int argc, char **argv)
 		if (sunxi_fip_load_redundant(1, 8, staging, sizeof(staging),
 					     fake_read, &disk, record_copy, &log,
 					     &loaded_size, &used_sector) != 0 ||
-		    disk.count != 2 || log.count != 3 ||
+		    disk.count != 2 || log.count != 4 ||
 		    loaded_size != FIP_SIZE || used_sector != 1) {
 			fprintf(stderr, "valid redundant FIP was not loaded\n");
 			return EXIT_FAILURE;
 		}
 		require_copy(&log, 0, SUNXI_FIP_BL31_BASE, staging + 320, 5);
 		require_copy(&log, 1, SUNXI_FIP_BL33_BASE, staging + 384, 6);
-		require_copy(&log, 2, SUNXI_FIP_SCP_BL2_BASE, staging + 256, 4);
+		require_copy(&log, 2, SUNXI_FIP_HW_CONFIG_BASE, staging + 448,
+			     TEST_FDT_SIZE);
+		require_copy(&log, 3, SUNXI_FIP_SCP_BL2_BASE, staging + 256, 4);
 	}
 
 	{
@@ -779,6 +868,7 @@ int main(int argc, char **argv)
 		size_t oversized_size;
 		unsigned char *oversized =
 			make_sized_fip(1, SUNXI_FIP_BL31_MAX_SIZE + 1, 1,
+				       TEST_FDT_SIZE,
 				       &oversized_size);
 		size_t loaded_size = 0;
 		unsigned int used_sector = 0;
@@ -796,7 +886,7 @@ int main(int argc, char **argv)
 					     SUNXI_FIP_MAX_SIZE, fake_read, &disk,
 					     record_copy, &log, &loaded_size,
 					     &used_sector) != 0 ||
-		    disk.count != 4 || log.count != 3 ||
+		    disk.count != 4 || log.count != 4 ||
 		    loaded_size != FIP_SIZE || used_sector != backup_sector) {
 			fprintf(stderr,
 				"oversized primary FIP did not fall back to backup\n");

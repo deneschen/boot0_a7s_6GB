@@ -1,0 +1,1 @@
+obj-$(CFG_DRAM_DTS_PARA_V2) += dram_dts_para_v2.o
