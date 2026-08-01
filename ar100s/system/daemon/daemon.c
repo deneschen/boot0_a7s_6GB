@@ -52,6 +52,13 @@ static s32 startup_state_notify(s32 result)
 	/* must end with '\0' */
 	strncpy((char *)(arisc_version), SUB_VER, sizeof(arisc_version) - 1);
 
+	/*
+	 * Best-effort: with no ARM-side consumer the 8-word FIFO cannot hold
+	 * this 15-word frame, so the send may leave a partial frame behind.
+	 * The message loop drops the late reply, and a future consumer is
+	 * expected to flush its receive FIFO before use (as the sunxi-msgbox
+	 * driver does), so a stale frame is discarded rather than misparsed.
+	 */
 	ret = hwmsgbox_send_message(&message, STARTUP_NOTIFY_TIMEOUT);
 
 	if (ret == OK)
