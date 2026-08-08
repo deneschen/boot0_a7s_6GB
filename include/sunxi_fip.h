@@ -28,6 +28,7 @@ struct sunxi_fip_layout {
 
 typedef int (*sunxi_fip_copy_fn)(u32 destination, const void *source,
 				 size_t size, void *context);
+/* Return 1 on success, any other value on failure. */
 typedef int (*sunxi_fip_read_fn)(u32 start_sector, u32 sector_count,
 				 void *destination, void *context);
 
