@@ -29,6 +29,20 @@
 #define CONFIG_FIP_HANDOFF_BASE            (CONFIG_BOOTPKG_BASE - 0x1000)
 #define CONFIG_FIP_HANDOFF_SIZE            (0x1000)
 #define CONFIG_MONITOR_BASE               SDRAM_OFFSET(0x08000000)
+/*
+ * bl31-monitor.bin layout:
+ *   +0x0000  AArch32 monitor header (gen_monitor_img.py)
+ *   +0x1000  real AArch64 BL31 entry (linked at CONFIG_MONITOR_BASE+0x1000)
+ *
+ * RMR warm-reset enters AArch64, so RVBAR must point at the BL31 entry,
+ * not at the AArch32 header that only a direct AArch32 branch would use.
+ */
+#define CONFIG_MONITOR_HEAD_SIZE          (0x1000)
+#define CONFIG_MONITOR_ENTRY              (CONFIG_MONITOR_BASE + CONFIG_MONITOR_HEAD_SIZE)
+/* Cluster INITARCH / alternate per-core RVBAR (CPUSUBSYS). */
+#define SUNXI_INITARCH_REG                (SUNXI_CPUXCFG_BASE + 0x1000)
+#define SUNXI_ALT_RVBAR_LO                (SUNXI_CPUXCFG_BASE + 0x40)
+#define SUNXI_ALT_RVBAR_HI                (SUNXI_CPUXCFG_BASE + 0x44)
 #define CONFIG_UBOOT_BASE                 SDRAM_OFFSET(0x0a000000)
 #define SCP_DRAM_BASE                     SDRAM_OFFSET(0x08100000)
 #define SCP_DTS_BASE                      SDRAM_OFFSET(0x08100000)
