@@ -3,6 +3,14 @@
 	.syntax unified
 	.thumb
 
+	/*
+	 * Relocated to CONFIG_FIP_HANDOFF_BASE (DRAM) before use: SCP_SRAM
+	 * (0x44000..0x6c000) overlaps boot0 @ 0x47000, so this code cannot
+	 * run from SRAM while staging SCP_BL2.
+	 *
+	 * Skip SCTLR MMU/cache disable: it hangs on this A733 path, and RMR
+	 * restarts the PE with a clean MMU state at CONFIG_MONITOR_ENTRY.
+	 */
 	.section .text.fip_handoff, "ax", %progbits
 	.align 2
 	.global fip_handoff_start
@@ -41,6 +49,7 @@ fip_handoff_start:
 	str	r4, [r3]
 	dsb	sy
 
+	/* Word clear then word copy (byte loop was needlessly slow). */
 	ldr	r3, =SCP_SRAM_BASE
 	movs	r4, #0
 	ldr	r5, =SCP_SRAM_SIZE
@@ -49,25 +58,35 @@ fip_handoff_start:
 	subs	r5, r5, #4
 	bne	1b
 
+	/* r7 may not be word-aligned; copy remaining bytes after words. */
 	ldr	r3, =SCP_SRAM_BASE
+	mov	r5, r7
+	lsrs	r5, r5, #2
+	beq	2f
+1:
+	ldr	r4, [r6], #4
+	str	r4, [r3], #4
+	subs	r5, r5, #1
+	bne	1b
 2:
-	cmp	r7, #0
-	beq	3f
+	ands	r7, r7, #3
+	beq	4f
+3:
 	ldrb	r4, [r6], #1
 	strb	r4, [r3], #1
 	subs	r7, r7, #1
-	b	2b
+	bne	3b
 
-	3:
-	/* Publish immutable startup inputs before releasing the E902 reset. */
+4:
+	/* Publish startup inputs before releasing E902. */
 	ldr	r3, =SUNXI_RTC_DTB_BASE_STORE_REG
 	str	r8, [r3]
 	ldr	r3, =SUNXI_E902_RST_START_ADDR_REG
 	ldr	r4, =SUNXI_E902_RESET_VECTOR
 	str	r4, [r3]
-
 	dsb	sy
 	isb	sy
+
 	ldr	r3, =SUNXI_RCPUCFG_BASE
 	ldr	r4, [r3]
 	orr	r4, r4, #1
@@ -76,34 +95,42 @@ fip_handoff_start:
 	dsb	sy
 	isb	sy
 
-	/* Identity mapping lets this DRAM stub continue after disabling the MMU. */
-	mrc	p15, 0, r4, c1, c0, 0
-	bic	r4, r4, #0x1000
-	bic	r4, r4, #0x7
-	mcr	p15, 0, r4, c1, c0, 0
-	isb	sy
-	movs	r4, #0
-	mcr	p15, 0, r4, c7, c5, 0
-	mcr	p15, 0, r4, c7, c5, 6
+	/*
+	 * Program INITARCH + both RVBAR aliases to the real AArch64 BL31
+	 * entry (monitor header + 0x1000), then request RMR AA64+RR.
+	 */
+	ldr	r3, =SUNXI_INITARCH_REG
+	ldr	r4, [r3]
+	orr	r4, r4, #1
+	dmb	sy
+	str	r4, [r3]
 	dsb	sy
-	isb	sy
 
-	/* Match boot0_jmp_monitor(): publish BL31 and wake the application CPU. */
-	ldr	r3, =RVBARADDR0_L
-	ldr	r4, =CONFIG_MONITOR_BASE
+	ldr	r3, =SUNXI_ALT_RVBAR_LO
+	ldr	r4, =CONFIG_MONITOR_ENTRY
 	dmb	sy
 	str	r4, [r3]
 	dmb	sy
 	movs	r2, #0
 	str	r2, [r3, #4]
+
+	ldr	r3, =RVBARADDR0_L
+	ldr	r4, =CONFIG_MONITOR_ENTRY
+	dmb	sy
+	str	r4, [r3]
+	dmb	sy
+	movs	r2, #0
+	str	r2, [r3, #4]
+	dsb	sy
+
 	mrc	p15, 0, r2, c12, c0, 2
 	orr	r2, r2, #3
 	dsb	sy
 	mcr	p15, 0, r2, c12, c0, 2
 	isb	sy
-	4:
+5:
 	wfi
-	b	4b
+	b	5b
 
 	.ltorg
 fip_handoff_end:

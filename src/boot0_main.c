@@ -172,6 +172,18 @@ void main(void)
 	if (load_and_run_fastboot(uboot_base, optee_base, monitor_base, rtos_base, opensbi_base, cpus_rtos_base))
 		goto _BOOT_ERROR;
 
+	/*
+	 * Patch the monitor header with the BL33 load address. Do not call
+	 * v7_flush_dcache_all()/mmu_disable() here: on this A733 boot path the
+	 * vendor flush hangs, and RMR restarts the CPU in a clean MMU state.
+	 */
+	if (monitor_base) {
+		struct spare_monitor_head *monitor_head =
+			(struct spare_monitor_head *)(phys_addr_t)monitor_base;
+		monitor_head->secureos_base = optee_base;
+		monitor_head->nboot_base = uboot_base;
+	}
+
 	printf("Jump to second Boot.\n");
 	if (run_fip_handoff(&fip_images) != 0)
 		goto _BOOT_ERROR;
@@ -268,22 +280,68 @@ static void invalidate_instruction_cache(void)
 		: "memory");
 }
 
+/*
+ * Clean D-cache by VA to PoC for a small relocated region.
+ * Avoid v7_flush_dcache_all() on this path: the vendor set/way flush hangs
+ * after FIP load on A733.
+ */
+static void clean_dcache_range(unsigned long start, unsigned long size)
+{
+	unsigned long end = start + size;
+	unsigned long line = 32;
+	unsigned long addr;
+
+	start &= ~(line - 1);
+	for (addr = start; addr < end; addr += line) {
+		__asm__ volatile("mcr p15, 0, %0, c7, c10, 1"
+				 :
+				 : "r" (addr)
+				 : "memory");
+	}
+	__asm__ volatile("dsb sy" ::: "memory");
+}
+
 static int run_fip_handoff(const struct fip_boot_images *images)
 {
-	size_t handoff_size = fip_handoff_end - fip_handoff_start;
+	/*
+	 * fip_handoff_start is a Thumb function symbol, so its ELF value has
+	 * bit0 set (e.g. 0x47b65). That is correct for BLX, but memcpy of
+	 * the machine code must start at the even address. Clear bit0 on both
+	 * ends before computing size / copying bytes.
+	 */
+	const u8 *handoff_src =
+		(const u8 *)((unsigned long)fip_handoff_start & ~1UL);
+	const u8 *handoff_end_addr =
+		(const u8 *)((unsigned long)fip_handoff_end & ~1UL);
+	size_t handoff_size = (size_t)(handoff_end_addr - handoff_src);
 	fip_handoff_fn handoff;
 
+	printf("FIP: prepare handoff size=%u src=0x%lx\n",
+	       (u32)handoff_size, (unsigned long)handoff_src);
+
 	if (!images->scp_source || !images->scp_size ||
-	    handoff_size > CONFIG_FIP_HANDOFF_SIZE) {
+	    handoff_size == 0 || handoff_size > CONFIG_FIP_HANDOFF_SIZE) {
 		printf("FIP: invalid handoff layout\n");
 		return -1;
 	}
 
+	/*
+	 * SCP_SRAM is 0x44000..0x6c000 and overlaps boot0 @ 0x47000. The
+	 * handoff stub must run from DRAM so clearing/copying SCP cannot
+	 * overwrite the code that is still executing.
+	 */
 	memcpy((void *)(phys_addr_t)CONFIG_FIP_HANDOFF_BASE,
-	       fip_handoff_start, handoff_size);
-	v7_flush_dcache_all();
+	       handoff_src, handoff_size);
+	clean_dcache_range(CONFIG_FIP_HANDOFF_BASE, handoff_size);
+	clean_dcache_range(CONFIG_MONITOR_BASE, SUNXI_FIP_BL31_MAX_SIZE);
+	clean_dcache_range(CONFIG_UBOOT_BASE, SUNXI_FIP_BL33_MAX_SIZE);
+	clean_dcache_range((unsigned long)images->scp_source, images->scp_size);
 	invalidate_instruction_cache();
 
+	printf("FIP: handoff scp=%u dtb=0x%x entry=0x%x dest=0x%x\n",
+	       images->scp_size, images->dtb_base, CONFIG_MONITOR_ENTRY,
+	       CONFIG_FIP_HANDOFF_BASE);
+	/* Dest is even; set Thumb bit only on the call target. */
 	handoff = (fip_handoff_fn)(phys_addr_t)(CONFIG_FIP_HANDOFF_BASE | 1U);
 	handoff(images->scp_source, images->scp_size, images->dtb_base);
 	return -1;
