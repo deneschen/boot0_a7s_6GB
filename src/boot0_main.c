@@ -185,7 +185,12 @@ static int fip_mmc_read(u32 start_sector, u32 sector_count,
 			void *destination, void *context)
 {
 	(void)context;
-	return mmc_bread_ext(start_sector, sector_count, destination);
+	/*
+	 * Vendor mmc_bread_ext returns 0 on success and non-zero on failure.
+	 * sunxi_fip_read_fn expects 1 on success (U-Boot block_read style),
+	 * so convert here instead of changing the FIP parser contract.
+	 */
+	return mmc_bread_ext(start_sector, sector_count, destination) == 0 ? 1 : 0;
 }
 
 static int fip_copy_image(u32 destination, const void *source, size_t size,
