@@ -88,6 +88,7 @@ OBJS := $(BUILD)/boot0_entry.o \
         $(BUILD)/fip_handoff.o \
         $(BUILD)/boot0_head.o \
         $(BUILD)/early_uart.o \
+        $(BUILD)/clock_a733.o \
         $(BUILD)/boot0_main.o \
         $(BUILD)/sunxi_fip.o \
         $(BUILD)/platform_shims.o
@@ -113,6 +114,7 @@ FIPTOOL_TEST_IMAGE := $(BUILD)/test_fiptool.bin
 FIPTOOL_TEST_IMAGE_NO_DTB := $(BUILD)/test_fiptool_no_dtb.bin
 FIPTOOL_TEST_DTB := $(BUILD)/test_hw_config.dtb
 SANITIZED_FIP_TEST := $(BUILD)/test_sunxi_fip_sanitize
+CLOCK_TEST := $(BUILD)/test_clock_a733
 
 .PHONY: all clean test test-sanitize test-fiptool verify scp scp-clean \
 	uboot verify-all
@@ -141,8 +143,9 @@ scp-clean:
 	-$(TOP)/ar100s/build.sh clean
 	rm -f $(BUILD)/scp.bin $(BUILD)/scp.elf
 
-test: $(BUILD)/test_sunxi_fip
-	$<
+test: $(BUILD)/test_sunxi_fip $(CLOCK_TEST)
+	$(BUILD)/test_sunxi_fip
+	$(CLOCK_TEST)
 
 test-sanitize: $(SANITIZED_FIP_TEST)
 	ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 $<
@@ -161,6 +164,15 @@ $(SANITIZED_FIP_TEST): $(TOP)/tests/test_sunxi_fip.c \
 		-fsanitize=address,undefined -fno-omit-frame-pointer \
 		-I$(TOP)/include -I$(TOP)/include/arch/arm -o $@ \
 		$(TOP)/tests/test_sunxi_fip.c $(TOP)/src/sunxi_fip.c
+
+$(CLOCK_TEST): $(TOP)/tests/test_clock_a733.c \
+		       $(TOP)/tests/include/common.h \
+		       $(TOP)/src/clock_a733.c \
+		       $(TOP)/include/clock_a733.h | $(BUILD)
+	$(HOSTCC) -std=c11 -Wall -Wextra -Werror \
+		-I$(TOP)/tests/include -I$(TOP)/include \
+		-I$(TOP)/include/arch/arm -I$(TOP)/include/arch/$(PLATFORM) \
+		-o $@ $(TOP)/tests/test_clock_a733.c $(TOP)/src/clock_a733.c
 
 ifneq ($(wildcard $(FIPTOOL)),)
 $(FIPTOOL_TEST_IMAGE): $(BUILD)/test_sunxi_fip \
@@ -209,6 +221,11 @@ $(BUILD)/boot0_main.o: $(TOP)/src/boot0_main.c \
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/early_uart.o: $(TOP)/src/early_uart.c | $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/clock_a733.o: $(TOP)/src/clock_a733.c \
+			       $(TOP)/include/clock_a733.h \
+			       $(TOP)/include/arch/$(PLATFORM)/clock_autogen.h | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/sunxi_fip.o: $(TOP)/src/sunxi_fip.c \
