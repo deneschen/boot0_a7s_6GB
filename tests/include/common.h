@@ -2,6 +2,7 @@
 #define _A7S_CLOCK_TEST_COMMON_H_
 
 #include <stdint.h>
+#include <stdio.h>
 
 uint32_t test_readl(unsigned long address);
 void test_writel(uint32_t value, unsigned long address);
