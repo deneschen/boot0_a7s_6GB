@@ -599,13 +599,30 @@ PXE/extlinux 对无传统/FIT 头的 ARM64 `Image` 调用 `booti`：`src/cmd/pxe
 
 ## 11. 正确烧录顺序
 
+`build_boot.sh` 默认从相邻的 `../u-boot` 主线树构建
+`cubie_a7s_defconfig`，输出放在本项目的
+`build/u-boot-a733/u-boot.bin`，然后作为 BL33 封装进 FIP。U-Boot 源码树
+和 boot0 项目之间只通过 `make uboot` 及该二进制产物连接，升级 U-Boot
+不需要把源码复制进本项目。
+
+单独构建并校验主线 U-Boot：
+
+```bash
+make uboot
+```
+
+复用已有构建可传 `--skip-uboot`；使用其他源码目录可传
+`--uboot-dir DIR`；兼容旧厂商或其他预编译 BL33 时显式传
+`--uboot FILE`。当前主线 BL33 是 ELF32 ARM，入口为 `0x4a000000`；上文
+厂商 U-Boot 的 `0x4a000640` 入口和私有头布局只属于历史厂商镜像。
+
 ### 11.1 有整盘镜像时
 
 ```bash
 # 1. 先写整盘镜像
 sudo dd if=card.img of=/dev/sdX bs=4M conv=fsync status=progress
 
-# 2. 构建当前 boot0、SCP、BL31 和 FIP
+# 2. 构建当前 boot0、SCP、BL31、主线 U-Boot 和 FIP
 cd /home/denes/Allwinner/A7S/boot0-A7S
 ./build_boot.sh
 
