@@ -152,6 +152,8 @@ static void test_dcxo_configuration(unsigned int status, unsigned int n,
 	assert((reg_value(PLL_PERI1_CTRL_REG) & PERI_STATUS) == PERI_STATUS);
 	assert(((reg_value(PLL_PERI0_CTRL_REG) >> 8) & 0xffU) == 99U);
 	assert(((reg_value(PLL_PERI1_CTRL_REG) >> 8) & 0xffU) == 103U);
+	assert((reg_value(PERI0PLL_GATE_EN_REG) & 0x8fff0fffU) == 0x8fff0fffU);
+	assert((reg_value(PERI1PLL_GATE_EN_REG) & 0x8fff0fffU) == 0x8fff0fffU);
 	assert_bus_rates();
 	assert(total_delay_us >= 60U);
 	assert_programming_order();
