@@ -34,6 +34,9 @@
 #define A7S_APB_DIV_6			(6U - 1U)
 #define A7S_UART_DIV_20			(20U - 1U)
 
+/* All documented SW and no-auto gate bits; reserved bits stay untouched. */
+#define A7S_PERI_DISTRIBUTION_GATES	0x8fff0fffU
+
 struct a7s_pll_config {
 	unsigned long reg;
 	unsigned long pattern_reg;
@@ -305,6 +308,16 @@ static int a7s_bus_use_nominal_rates(void)
 	return 0;
 }
 
+static int a7s_peri_distribution_enable(unsigned int offset)
+{
+	unsigned long reg = a7s_ccu_reg(offset);
+	unsigned int value = readl(reg) | A7S_PERI_DISTRIBUTION_GATES;
+
+	writel(value, reg);
+	return (readl(reg) & A7S_PERI_DISTRIBUTION_GATES) ==
+	       A7S_PERI_DISTRIBUTION_GATES ? 0 : -1;
+}
+
 int a7s_clock_init(void)
 {
 	if (a7s_bus_use_sys24())
@@ -316,6 +329,11 @@ int a7s_clock_init(void)
 	if (a7s_peri_pll_init(PLL_PERI1_CTRL_REG, 104)) {
 		a7s_bus_use_sys24();
 		return A7S_CLOCK_ERR_PERI1_PLL;
+	}
+	if (a7s_peri_distribution_enable(PERI0PLL_GATE_EN_REG) ||
+	    a7s_peri_distribution_enable(PERI1PLL_GATE_EN_REG)) {
+		a7s_bus_use_sys24();
+		return A7S_CLOCK_ERR_BUS;
 	}
 	if (a7s_bus_use_nominal_rates()) {
 		a7s_bus_use_sys24();
