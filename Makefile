@@ -25,6 +25,16 @@ TOP      := $(CURDIR)
 BUILD    := $(TOP)/build
 PLATFORM := sun60iw2p1
 
+# Mainline U-Boot BL33. Keep its output under this project's build directory
+# while leaving the independently upgradeable source tree untouched.
+UBOOT_TOP       ?= $(abspath $(TOP)/../u-boot)
+UBOOT_BUILD     ?= $(BUILD)/u-boot-a733
+UBOOT_CROSS     ?= arm-none-eabi-
+UBOOT_DEFCONFIG ?= cubie_a7s_defconfig
+UBOOT_ELF       := $(UBOOT_BUILD)/u-boot
+UBOOT_BIN       := $(UBOOT_BUILD)/u-boot.bin
+UBOOT_DTB       := $(UBOOT_BUILD)/u-boot.dtb
+
 # ---- run/size layout --------------------------------------------------------
 # The flashable A733 SD-card boot0 image in device-a733/bin is linked and
 # advertised to BROM at 0x47000.  Keep this standalone build on that runtime
@@ -104,8 +114,20 @@ FIPTOOL_TEST_IMAGE_NO_DTB := $(BUILD)/test_fiptool_no_dtb.bin
 FIPTOOL_TEST_DTB := $(BUILD)/test_hw_config.dtb
 SANITIZED_FIP_TEST := $(BUILD)/test_sunxi_fip_sanitize
 
-.PHONY: all clean test test-sanitize test-fiptool verify scp scp-clean verify-all
+.PHONY: all clean test test-sanitize test-fiptool verify scp scp-clean \
+	uboot verify-all
 all: $(BUILD)/$(NAME).bin
+
+# ---- U-Boot BL33 ------------------------------------------------------------
+uboot: | $(BUILD)
+	@test -d $(UBOOT_TOP) || { echo "missing U-Boot tree: $(UBOOT_TOP)" >&2; exit 1; }
+	@test -f $(UBOOT_TOP)/configs/$(UBOOT_DEFCONFIG) || { \
+		echo "missing U-Boot defconfig: $(UBOOT_DEFCONFIG)" >&2; exit 1; }
+	$(MAKE) -C $(UBOOT_TOP) O=$(UBOOT_BUILD) CROSS_COMPILE=$(UBOOT_CROSS) \
+		$(UBOOT_DEFCONFIG)
+	$(MAKE) -C $(UBOOT_TOP) O=$(UBOOT_BUILD) CROSS_COMPILE=$(UBOOT_CROSS)
+	@python3 $(TOP)/tools/check_a733_uboot.py \
+		--elf $(UBOOT_ELF) --binary $(UBOOT_BIN) --dtb $(UBOOT_DTB)
 
 # ---- AR100S / SCP firmware --------------------------------------------------
 # Transplant of u-boot-aw2501/arisc/ar100s, built the same way as
@@ -230,11 +252,12 @@ verify: all test-fiptool test-sanitize
 	@echo "=== entry head (first 32 bytes) ==="; xxd -l 32 $(BUILD)/$(NAME).bin
 	@python3 $(TOP)/tools/check_a7s_boot0.py $(BUILD)/$(NAME).bin $(BUILD)/boot0.map
 
-# boot0 + SCP firmware (A7S FIP ingredients)
-verify-all: verify scp
+# boot0 + SCP firmware + U-Boot BL33 (A7S FIP ingredients)
+verify-all: verify scp uboot
 	@echo "=== SCP ==="; file $(BUILD)/scp.bin $(TOP)/ar100s/scp.elf
 	@ls -l $(BUILD)/scp.bin $(TOP)/ar100s/scp.bin
 	@$(TOP)/tools/check_ar100s.py --staged $(BUILD)/scp.bin
+	@echo "=== U-Boot BL33 ==="; file $(UBOOT_ELF) $(UBOOT_BIN)
 
 clean: scp-clean
 	rm -rf $(BUILD)
