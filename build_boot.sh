@@ -6,7 +6,7 @@
 # local changes in:
 #   - arm-trusted-firmware        (BL31, --soc-fw)
 #   - boot0-A7S/ar100s            (SCP,  --scp-fw)
-#   - u-boot-aw2501               (BL33, --nt-fw)
+#   - u-boot                      (BL33, --nt-fw)
 #
 # Steps:
 #   1. build boot0  (this tree)               -> build/boot0_sdcard_sun60iw2p1.bin
@@ -16,7 +16,8 @@
 #      (BL31 is linked at 0x48001000; boot0 copies the monitor header plus
 #       BL31 to 0x48000000 and enters at 0x48001000, so the FIP must carry
 #       the header + BL31, not the bare bl31.bin)
-#   5. package FIP with fiptool               -> build/fip.bin
+#   5. build U-Boot BL33                      -> build/u-boot-a733/u-boot.bin
+#   6. package and validate FIP               -> build/fip.bin
 #
 # Flashing is handled by a separate script (../Share/flash.sh), which writes
 # boot0 + FIP to an SD/MMC device.
@@ -28,8 +29,11 @@
 #   --skip-boot0     keep existing build/boot0_sdcard_sun60iw2p1.bin
 #   --skip-scp       keep existing build/scp.bin
 #   --skip-bl31      keep the selected monitor image
+#   --skip-uboot     keep existing build/u-boot-a733/u-boot.bin
 #   --atf DIR        arm-trusted-firmware tree (default: ../arm-trusted-firmware)
-#   --uboot FILE     BL33 image (default: ../u-boot-aw2501/src/u-boot.bin)
+#   --uboot-dir DIR  mainline U-Boot tree (default: ../u-boot)
+#   --uboot-cross P  U-Boot toolchain prefix (default: arm-none-eabi-)
+#   --uboot FILE     use an external prebuilt BL33 instead of building U-Boot
 #   --jobs N         parallel make jobs (default: nproc)
 #   -h, --help       show this help
 # =============================================================================
@@ -38,19 +42,27 @@ set -euo pipefail
 # ---- defaults ---------------------------------------------------------------
 TOP="$(cd "$(dirname "$0")" && pwd)"
 ATF="$(cd "${TOP}/.." && pwd)/arm-trusted-firmware"
-UBOOT_BIN="$(cd "${TOP}/.." && pwd)/u-boot-aw2501/src/u-boot.bin"
 BUILD="${TOP}/build"
+UBOOT_DIR="$(cd "${TOP}/.." && pwd)/u-boot"
+UBOOT_BUILD="${BUILD}/u-boot-a733"
+UBOOT_CROSS="${UBOOT_CROSS:-arm-none-eabi-}"
+UBOOT_BIN="${UBOOT_BUILD}/u-boot.bin"
+UBOOT_ELF="${UBOOT_BUILD}/u-boot"
+UBOOT_DTB="${UBOOT_BUILD}/u-boot.dtb"
 BL31_PLAT="sun60i_a733"
 BL31_LOAD_ADDR="0x48000000"
+BL33_MAX_SIZE=$((0x180000))
 
 JOBS="$(nproc 2>/dev/null || echo 4)"
 
 SKIP_BOOT0=0
 SKIP_SCP=0
 SKIP_BL31=0
+SKIP_UBOOT=0
+EXTERNAL_UBOOT=0
 
 usage() {
-	sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+	sed -n '3,/^# ===/p' "$0" | sed '$d; s/^# \{0,1\}//'
 }
 
 # ---- options ----------------------------------------------------------------
@@ -59,12 +71,19 @@ while [ $# -gt 0 ]; do
 	--skip-boot0) SKIP_BOOT0=1 ;;
 	--skip-scp) SKIP_SCP=1 ;;
 	--skip-bl31) SKIP_BL31=1 ;;
+	--skip-uboot) SKIP_UBOOT=1 ;;
 	--atf)
 		[ $# -ge 2 ] || { echo "error: --atf needs a directory" >&2; exit 1; }
 		ATF="$2"; shift ;;
+	--uboot-dir)
+		[ $# -ge 2 ] || { echo "error: --uboot-dir needs a directory" >&2; exit 1; }
+		UBOOT_DIR="$2"; shift ;;
+	--uboot-cross)
+		[ $# -ge 2 ] || { echo "error: --uboot-cross needs a prefix" >&2; exit 1; }
+		UBOOT_CROSS="$2"; shift ;;
 	--uboot)
 		[ $# -ge 2 ] || { echo "error: --uboot needs a file" >&2; exit 1; }
-		UBOOT_BIN="$2"; shift ;;
+		UBOOT_BIN="$2"; EXTERNAL_UBOOT=1; shift ;;
 	--jobs)
 		[ $# -ge 2 ] || { echo "error: --jobs needs a number" >&2; exit 1; }
 		JOBS="$2"; shift ;;
@@ -84,7 +103,15 @@ GEN_MONITOR="${ATF}/plat/allwinner/${BL31_PLAT}/gen_monitor_img.py"
 
 # ---- sanity checks ----------------------------------------------------------
 [ -d "${ATF}" ] || { echo "error: ATF tree not found: ${ATF}" >&2; exit 1; }
-[ -f "${UBOOT_BIN}" ] || { echo "error: BL33 not found: ${UBOOT_BIN}" >&2; exit 1; }
+ATF="$(cd "${ATF}" && pwd)"
+if [ "${EXTERNAL_UBOOT}" -eq 0 ]; then
+	[ -d "${UBOOT_DIR}" ] || { echo "error: U-Boot tree not found: ${UBOOT_DIR}" >&2; exit 1; }
+	UBOOT_DIR="$(cd "${UBOOT_DIR}" && pwd)"
+	[ -f "${UBOOT_DIR}/configs/cubie_a7s_defconfig" ] || {
+		echo "error: missing cubie_a7s_defconfig in ${UBOOT_DIR}" >&2
+		exit 1
+	}
+fi
 
 require_file() {
 	[ -f "$1" ] || { echo "error: missing $1 (build it or drop the matching --skip-*)" >&2; exit 1; }
@@ -128,7 +155,30 @@ else
 fi
 require_file "${BL31_MONITOR}"
 
-# ---- 5. FIP -----------------------------------------------------------------
+# ---- 5. U-Boot BL33 ---------------------------------------------------------
+if [ "${EXTERNAL_UBOOT}" -eq 1 ]; then
+	echo "==> using external U-Boot BL33: ${UBOOT_BIN}"
+elif [ "${SKIP_UBOOT}" -eq 1 ]; then
+	echo "==> skipping U-Boot build"
+	require_file "${UBOOT_ELF}"
+	python3 "${TOP}/tools/check_a733_uboot.py" \
+		--elf "${UBOOT_ELF}" --binary "${UBOOT_BIN}" --dtb "${UBOOT_DTB}"
+else
+	echo "==> building U-Boot BL33"
+	make -C "${TOP}" -j"${JOBS}" uboot \
+		UBOOT_TOP="${UBOOT_DIR}" \
+		UBOOT_BUILD="${UBOOT_BUILD}" \
+		UBOOT_CROSS="${UBOOT_CROSS}"
+fi
+require_file "${UBOOT_BIN}"
+
+UBOOT_SIZE="$(wc -c < "${UBOOT_BIN}")"
+if [ "${UBOOT_SIZE}" -gt "${BL33_MAX_SIZE}" ]; then
+	echo "error: BL33 size ${UBOOT_SIZE} exceeds ${BL33_MAX_SIZE} bytes" >&2
+	exit 1
+fi
+
+# ---- 6. FIP -----------------------------------------------------------------
 echo "==> packaging FIP"
 "${FIPTOOL}" create --align 512 \
 	--scp-fw "${BUILD}/scp.bin" \
@@ -137,9 +187,11 @@ echo "==> packaging FIP"
 	"${FIP_OUTPUT}"
 echo "==> FIP contents:"
 "${FIPTOOL}" info "${FIP_OUTPUT}"
+make -C "${TOP}" test
+"${BUILD}/test_sunxi_fip" "${FIP_OUTPUT}"
 
 echo
 echo "=== build done ==="
 ls -l "${BUILD}/boot0_sdcard_sun60iw2p1.bin" "${BUILD}/scp.bin" \
-	"${BL31_MONITOR}" "${FIP_OUTPUT}"
+	"${BL31_MONITOR}" "${UBOOT_BIN}" "${FIP_OUTPUT}"
 echo "=== flash with: sudo ../Share/flash.sh /dev/sdX ==="
