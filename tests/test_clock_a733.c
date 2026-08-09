@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -29,6 +30,32 @@ static unsigned long lock_failure_address;
 static unsigned long total_delay_us;
 static struct write_event writes[MAX_WRITES];
 static unsigned int write_count;
+static unsigned int clock_printf_tracking;
+static unsigned int clock_printf_calls;
+static unsigned int clock_printf_bad_lines;
+
+int test_printf(const char *format, ...)
+{
+	const char *cursor;
+	unsigned int newlines = 0;
+	va_list args;
+	int result;
+
+	if (clock_printf_tracking) {
+		clock_printf_calls++;
+		for (cursor = format; *cursor; cursor++) {
+			if (*cursor == '\n')
+				newlines++;
+		}
+		if (newlines != 1U || cursor == format || cursor[-1] != '\n')
+			clock_printf_bad_lines++;
+	}
+
+	va_start(args, format);
+	result = vprintf(format, args);
+	va_end(args);
+	return result;
+}
 
 static int is_pll(unsigned long address)
 {
@@ -258,7 +285,13 @@ static void test_read_only_clock_rates(void)
 	assert(rates.nsi == 400000U);
 	assert(rates.mbus == 200000U);
 
+	clock_printf_calls = 0;
+	clock_printf_bad_lines = 0;
+	clock_printf_tracking = 1;
 	a7s_clock_dump();
+	clock_printf_tracking = 0;
+	assert(clock_printf_calls != 0U);
+	assert(clock_printf_bad_lines == 0U);
 	assert(write_count == writes_before);
 }
 

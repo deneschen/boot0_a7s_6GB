@@ -25,6 +25,10 @@
 #define A7S_RTC_XO_CTRL0		(SUNXI_RTC_BASE + 0x160U)
 #define A7S_AUDIO1_PLL_CTRL		0x00000280U
 
+#define A7S_RATE_FORMAT			"%u.%03uM%s"
+#define A7S_RATE_ARGS(rate)		(rate) / 1000U, (rate) % 1000U, \
+					((rate) ? "" : "(off)")
+
 static unsigned long a7s_ccu_reg(unsigned int offset)
 {
 	return SUNXI_CCMU_BASE + offset;
@@ -422,14 +426,6 @@ void a7s_clock_read_rates(struct a7s_clock_rates *rates)
 	rates->mbus = a7s_mbus_rate(readl(a7s_ccu_reg(MBUS_CLK_REG)), rates);
 }
 
-static void a7s_print_rate(unsigned int rate)
-{
-	if (!rate)
-		printf("off");
-	else
-		printf("%u.%03uM", rate / 1000U, rate % 1000U);
-}
-
 static const char *a7s_pll_lock_state(unsigned int reg)
 {
 	if (!(reg & A7S_PLL_LOCK_ENABLE))
@@ -442,9 +438,8 @@ static void a7s_print_single_pll(const char *name, unsigned int offset,
 {
 	unsigned int reg = readl(a7s_ccu_reg(offset));
 
-	printf("  PLL %s=", name);
-	a7s_print_rate(rate);
-	printf(" %s reg=%08x\n", a7s_pll_lock_state(reg), reg);
+	printf("  PLL %s=" A7S_RATE_FORMAT " %s reg=%08x\n", name,
+	       A7S_RATE_ARGS(rate), a7s_pll_lock_state(reg), reg);
 }
 
 static void a7s_print_cpu_pll(const char *name, unsigned long address,
@@ -452,9 +447,8 @@ static void a7s_print_cpu_pll(const char *name, unsigned long address,
 {
 	unsigned int reg = readl(address);
 
-	printf("  CPU PLL %s=", name);
-	a7s_print_rate(rate);
-	printf(" %s reg=%08x\n", a7s_pll_lock_state(reg), reg);
+	printf("  CPU PLL %s=" A7S_RATE_FORMAT " %s reg=%08x\n", name,
+	       A7S_RATE_ARGS(rate), a7s_pll_lock_state(reg), reg);
 }
 
 static void a7s_print_main_single(const char *name, unsigned int offset,
@@ -477,28 +471,27 @@ static void a7s_print_main_dual(const char *name, unsigned int offset,
 	unsigned int output0 = a7s_main_pll_output(reg, input, 20, 7U, 27);
 	unsigned int output1 = a7s_main_pll_output(reg, input, 16, 7U, 26);
 
-	printf("  PLL %s=", name);
-	a7s_print_rate(output0);
-	printf("/3x=");
-	a7s_print_rate(output1);
-	printf(" %s reg=%08x\n", a7s_pll_lock_state(reg), reg);
+	printf("  PLL %s=" A7S_RATE_FORMAT "/3x=" A7S_RATE_FORMAT
+	       " %s reg=%08x\n", name, A7S_RATE_ARGS(output0),
+	       A7S_RATE_ARGS(output1), a7s_pll_lock_state(reg), reg);
 }
 
 static void a7s_print_audio_plls(unsigned int ref)
 {
 	unsigned int reg = readl(a7s_ccu_reg(PLL_AUDIO0_CTRL_REG));
 	unsigned int rate = a7s_main_pll_output(reg, ref, 16, 0x7fU, 27);
+	unsigned int div2;
+	unsigned int div5;
 
-	printf("  PLL AUDIO0=");
-	a7s_print_rate(rate);
-	printf(" %s reg=%08x\n", a7s_pll_lock_state(reg), reg);
+	printf("  PLL AUDIO0=" A7S_RATE_FORMAT " %s reg=%08x\n",
+	       A7S_RATE_ARGS(rate), a7s_pll_lock_state(reg), reg);
 
 	reg = readl(a7s_ccu_reg(A7S_AUDIO1_PLL_CTRL));
-	printf("  PLL AUDIO1=");
-	a7s_print_rate(a7s_main_pll_output(reg, ref, 20, 7U, 27));
-	printf("/div5=");
-	a7s_print_rate(a7s_main_pll_output(reg, ref, 16, 7U, 27));
-	printf(" %s reg=%08x\n", a7s_pll_lock_state(reg), reg);
+	div2 = a7s_main_pll_output(reg, ref, 20, 7U, 27);
+	div5 = a7s_main_pll_output(reg, ref, 16, 7U, 27);
+	printf("  PLL AUDIO1=" A7S_RATE_FORMAT "/div5=" A7S_RATE_FORMAT
+	       " %s reg=%08x\n", A7S_RATE_ARGS(div2), A7S_RATE_ARGS(div5),
+	       a7s_pll_lock_state(reg), reg);
 }
 
 void a7s_clock_dump(void)
@@ -517,49 +510,38 @@ void a7s_clock_dump(void)
 	dsu_clk = readl(A7S_DSU_CLK);
 
 	printf("A7S clock dump: read-only nominal rates\n");
-	printf("  OSC DCXO=");
-	a7s_print_rate(rates.dcxo);
-	printf(" REF=");
-	a7s_print_rate(rates.ref);
-	printf(" %s reg=%08x\n", a7s_pll_lock_state(ref_reg), ref_reg);
+	printf("  OSC DCXO=" A7S_RATE_FORMAT " REF=" A7S_RATE_FORMAT
+	       " %s reg=%08x\n", A7S_RATE_ARGS(rates.dcxo),
+	       A7S_RATE_ARGS(rates.ref), a7s_pll_lock_state(ref_reg), ref_reg);
 
 	a7s_print_cpu_pll("BACK", A7S_CPU_BACK_PLL_CTRL,
 			  rates.cpu_back_pll);
 	a7s_print_cpu_pll("A", A7S_CPU_A_PLL_CTRL, rates.cpu_a_pll);
 	a7s_print_cpu_pll("B", A7S_CPU_B_PLL_CTRL, rates.cpu_b_pll);
 	a7s_print_cpu_pll("DSU", A7S_DSU_PLL_CTRL, rates.dsu_pll);
-	printf("  CPU CLK A=");
-	a7s_print_rate(rates.cpu_a);
-	printf("(src=%u reg=%08x) B=", (cpu_a_clk >> 24) & 7U, cpu_a_clk);
-	a7s_print_rate(rates.cpu_b);
-	printf("(src=%u reg=%08x)\n", (cpu_b_clk >> 24) & 7U, cpu_b_clk);
-	printf("  DSU CLK core=");
-	a7s_print_rate(rates.dsu);
-	printf(" AXI=");
-	a7s_print_rate(rates.dsu_axi);
-	printf(" APB=");
-	a7s_print_rate(rates.dsu_apb);
-	printf(" GIC=");
-	a7s_print_rate(rates.dsu_gic);
-	printf(" src=%u reg=%08x\n", (dsu_clk >> 24) & 7U, dsu_clk);
+	printf("  CPU CLK A=" A7S_RATE_FORMAT "(src=%u reg=%08x) B="
+	       A7S_RATE_FORMAT "(src=%u reg=%08x)\n",
+	       A7S_RATE_ARGS(rates.cpu_a), (cpu_a_clk >> 24) & 7U, cpu_a_clk,
+	       A7S_RATE_ARGS(rates.cpu_b), (cpu_b_clk >> 24) & 7U, cpu_b_clk);
+	printf("  DSU CLK core=" A7S_RATE_FORMAT " AXI=" A7S_RATE_FORMAT
+	       " APB=" A7S_RATE_FORMAT " GIC=" A7S_RATE_FORMAT
+	       " src=%u reg=%08x\n", A7S_RATE_ARGS(rates.dsu),
+	       A7S_RATE_ARGS(rates.dsu_axi), A7S_RATE_ARGS(rates.dsu_apb),
+	       A7S_RATE_ARGS(rates.dsu_gic), (dsu_clk >> 24) & 7U, dsu_clk);
 
 	a7s_print_single_pll("DDR", PLL_DDR_CTRL_REG, rates.ddr);
 	peri_reg = readl(a7s_ccu_reg(PLL_PERI0_CTRL_REG));
-	printf("  PLL PERI0 2x=");
-	a7s_print_rate(rates.peri0_2x);
-	printf(" 800=");
-	a7s_print_rate(rates.peri0_800);
-	printf(" 480=");
-	a7s_print_rate(rates.peri0_480);
-	printf(" %s reg=%08x\n", a7s_pll_lock_state(peri_reg), peri_reg);
+	printf("  PLL PERI0 2x=" A7S_RATE_FORMAT " 800=" A7S_RATE_FORMAT
+	       " 480=" A7S_RATE_FORMAT " %s reg=%08x\n",
+	       A7S_RATE_ARGS(rates.peri0_2x), A7S_RATE_ARGS(rates.peri0_800),
+	       A7S_RATE_ARGS(rates.peri0_480), a7s_pll_lock_state(peri_reg),
+	       peri_reg);
 	peri_reg = readl(a7s_ccu_reg(PLL_PERI1_CTRL_REG));
-	printf("  PLL PERI1 2x=");
-	a7s_print_rate(rates.peri1_2x);
-	printf(" 800=");
-	a7s_print_rate(rates.peri1_800);
-	printf(" 480=");
-	a7s_print_rate(rates.peri1_480);
-	printf(" %s reg=%08x\n", a7s_pll_lock_state(peri_reg), peri_reg);
+	printf("  PLL PERI1 2x=" A7S_RATE_FORMAT " 800=" A7S_RATE_FORMAT
+	       " 480=" A7S_RATE_FORMAT " %s reg=%08x\n",
+	       A7S_RATE_ARGS(rates.peri1_2x), A7S_RATE_ARGS(rates.peri1_800),
+	       A7S_RATE_ARGS(rates.peri1_480), a7s_pll_lock_state(peri_reg),
+	       peri_reg);
 
 	a7s_print_main_single("GPU0", PLL_GPU0_CTRL_REG, rates.dcxo,
 			      rates.ref, 20, 7U);
@@ -578,19 +560,11 @@ void a7s_clock_dump(void)
 	a7s_print_main_dual("DE", PLL_DE_CTRL_REG, rates.dcxo, rates.ref);
 	a7s_print_single_pll("CCI", PLL_CCI_CTRL_REG, rates.cci);
 
-	printf("  BUS AHB=");
-	a7s_print_rate(rates.ahb);
-	printf(" APB0=");
-	a7s_print_rate(rates.apb0);
-	printf(" APB1=");
-	a7s_print_rate(rates.apb1);
-	printf(" UART=");
-	a7s_print_rate(rates.uart);
-	printf("\n  FABRIC GIC=");
-	a7s_print_rate(rates.gic);
-	printf(" NSI=");
-	a7s_print_rate(rates.nsi);
-	printf(" MBUS=");
-	a7s_print_rate(rates.mbus);
-	printf("\n");
+	printf("  BUS AHB=" A7S_RATE_FORMAT " APB0=" A7S_RATE_FORMAT
+	       " APB1=" A7S_RATE_FORMAT " UART=" A7S_RATE_FORMAT "\n",
+	       A7S_RATE_ARGS(rates.ahb), A7S_RATE_ARGS(rates.apb0),
+	       A7S_RATE_ARGS(rates.apb1), A7S_RATE_ARGS(rates.uart));
+	printf("  FABRIC GIC=" A7S_RATE_FORMAT " NSI=" A7S_RATE_FORMAT
+	       " MBUS=" A7S_RATE_FORMAT "\n", A7S_RATE_ARGS(rates.gic),
+	       A7S_RATE_ARGS(rates.nsi), A7S_RATE_ARGS(rates.mbus));
 }
