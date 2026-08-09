@@ -5,6 +5,7 @@
 
 #include <common.h>
 #include <clock_a733.h>
+#include <clock_diag_a733.h>
 #include <private_boot0.h>
 #include <private_uboot.h>
 #include <private_toc.h>
@@ -110,9 +111,6 @@ void main(void)
 		       status);
 		goto _BOOT_ERROR;
 	}
-	printf("A7S clock: REF=24M PERI0=2400M PERI1=2496M "
-	       "AHB=200M APB=100M UART=24M\n");
-
 	if (rtc_probe_fel_flag()) {
 		rtc_clear_fel_flag();
 		goto _BOOT_ERROR;
@@ -148,6 +146,7 @@ void main(void)
 			dram_size = BT0_head.dram_size;
 		printf("dram size =%d\n", dram_size);
 	}
+	a7s_clock_dump();
 #ifdef CFG_SUNXI_STANDBY_WORKAROUND
 	handler_super_standby();
 #endif

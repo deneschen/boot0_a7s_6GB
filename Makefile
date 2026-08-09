@@ -220,6 +220,7 @@ $(BUILD)/boot0_head.o: $(TOP)/src/boot0_head.c | $(BUILD)
 
 $(BUILD)/boot0_main.o: $(TOP)/src/boot0_main.c \
 			       $(TOP)/include/clock_a733.h \
+			       $(TOP)/include/clock_diag_a733.h \
 			       $(TOP)/include/sunxi_fip.h \
 			       $(TOP)/include/sunxi_flashmap.h \
 			       $(TOP)/include/configs/sun60iw2p1.h | $(BUILD)
