@@ -4,6 +4,7 @@
  */
 
 #include <common.h>
+#include <clock_a733.h>
 #include <private_boot0.h>
 #include <private_uboot.h>
 #include <private_toc.h>
@@ -102,6 +103,15 @@ void main(void)
 	status = sunxi_board_init();
 	if (status)
 		goto _BOOT_ERROR;
+
+	status = a7s_clock_init();
+	if (status) {
+		printf("A7S clock init failed: %d (24 MHz fallback requested)\n",
+		       status);
+		goto _BOOT_ERROR;
+	}
+	printf("A7S clock: REF=24M PERI0=2400M PERI1=2496M "
+	       "AHB=200M APB=100M UART=24M\n");
 
 	if (rtc_probe_fel_flag()) {
 		rtc_clear_fel_flag();
