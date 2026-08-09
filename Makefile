@@ -89,6 +89,7 @@ OBJS := $(BUILD)/boot0_entry.o \
         $(BUILD)/boot0_head.o \
         $(BUILD)/early_uart.o \
         $(BUILD)/clock_a733.o \
+        $(BUILD)/clock_diag_a733.o \
         $(BUILD)/boot0_main.o \
         $(BUILD)/sunxi_fip.o \
         $(BUILD)/platform_shims.o
@@ -166,13 +167,16 @@ $(SANITIZED_FIP_TEST): $(TOP)/tests/test_sunxi_fip.c \
 		$(TOP)/tests/test_sunxi_fip.c $(TOP)/src/sunxi_fip.c
 
 $(CLOCK_TEST): $(TOP)/tests/test_clock_a733.c \
-		       $(TOP)/tests/include/common.h \
-		       $(TOP)/src/clock_a733.c \
-		       $(TOP)/include/clock_a733.h | $(BUILD)
+			       $(TOP)/tests/include/common.h \
+			       $(TOP)/src/clock_a733.c \
+			       $(TOP)/src/clock_diag_a733.c \
+			       $(TOP)/include/clock_a733.h \
+			       $(TOP)/include/clock_diag_a733.h | $(BUILD)
 	$(HOSTCC) -std=c11 -Wall -Wextra -Werror \
 		-I$(TOP)/tests/include -I$(TOP)/include \
 		-I$(TOP)/include/arch/arm -I$(TOP)/include/arch/$(PLATFORM) \
-		-o $@ $(TOP)/tests/test_clock_a733.c $(TOP)/src/clock_a733.c
+		-o $@ $(TOP)/tests/test_clock_a733.c $(TOP)/src/clock_a733.c \
+		$(TOP)/src/clock_diag_a733.c
 
 ifneq ($(wildcard $(FIPTOOL)),)
 $(FIPTOOL_TEST_IMAGE): $(BUILD)/test_sunxi_fip \
@@ -227,6 +231,11 @@ $(BUILD)/early_uart.o: $(TOP)/src/early_uart.c | $(BUILD)
 $(BUILD)/clock_a733.o: $(TOP)/src/clock_a733.c \
 			       $(TOP)/include/clock_a733.h \
 			       $(TOP)/include/arch/$(PLATFORM)/clock_autogen.h | $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/clock_diag_a733.o: $(TOP)/src/clock_diag_a733.c \
+				    $(TOP)/include/clock_diag_a733.h \
+				    $(TOP)/include/arch/$(PLATFORM)/clock_autogen.h | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/sunxi_fip.o: $(TOP)/src/sunxi_fip.c \
