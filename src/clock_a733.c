@@ -318,6 +318,11 @@ static int a7s_peri_distribution_enable(unsigned int offset)
 	       A7S_PERI_DISTRIBUTION_GATES ? 0 : -1;
 }
 
+void a7s_clock_reset(void)
+{
+	(void)a7s_bus_use_sys24();
+}
+
 int a7s_clock_init(void)
 {
 	if (a7s_bus_use_sys24())

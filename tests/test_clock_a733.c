@@ -157,6 +157,11 @@ static void test_dcxo_configuration(unsigned int status, unsigned int n,
 	assert_bus_rates();
 	assert(total_delay_us >= 60U);
 	assert_programming_order();
+	a7s_clock_reset();
+	assert((reg_value(AHB_CLK_REG) & 0x0300001fU) == 0);
+	assert((reg_value(APB0_CLK_REG) & 0x0300001fU) == 0);
+	assert((reg_value(APB1_CLK_REG) & 0x0300001fU) == 0);
+	assert((reg_value(APB_UART_CLK_REG) & 0x0700001fU) == 0);
 }
 
 static void test_stable_ref_pll_is_preserved(void)

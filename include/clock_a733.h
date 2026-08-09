@@ -16,4 +16,7 @@ enum a7s_clock_status {
  */
 int a7s_clock_init(void);
 
+/* Return the system buses to SYS_CLK24M without disturbing active PLLs. */
+void a7s_clock_reset(void);
+
 #endif

@@ -409,7 +409,7 @@ static void update_uboot_info(phys_addr_t uboot_base, phys_addr_t optee_base,
 static int boot0_clear_env(void)
 {
 	sunxi_board_exit();
-	sunxi_board_clock_reset();
+	a7s_clock_reset();
 	mmu_disable();
 	mdelay(10);
 
