@@ -35,12 +35,20 @@ volatile unsigned int print_timeflg = 1;
 */
 s32 debugger_init(void)
 {
+	s32 ret;
+
 	/* initialize serial module */
-	uart_init();
+	ret = uart_init();
+	if (ret != OK)
+		return ret;
 #ifdef CFG_SHELL_USED
 	extern s32 getcmd(void *parg);
-	install_isr(INTC_R_UART_IRQ, getcmd, NULL);
-	interrupt_enable(INTC_R_UART_IRQ);
+	ret = install_isr(INTC_R_UART_IRQ, getcmd, NULL);
+	if (ret != OK)
+		return ret;
+	ret = interrupt_enable(INTC_R_UART_IRQ);
+	if (ret != OK)
+		return ret;
 #endif
 
 	return OK;
@@ -75,9 +83,7 @@ s32 debugger_exit(void)
 */
 s32 debugger_putc(char ch)
 {
-	uart_putc(ch);
-
-	return OK;
+	return uart_putc(ch);
 }
 
 /*
@@ -109,9 +115,7 @@ u32 debugger_get(char *buf)
 */
 s32 debugger_puts(char *string)
 {
-	uart_puts(string);
-
-	return OK;
+	return uart_puts(string);
 }
 
 /*

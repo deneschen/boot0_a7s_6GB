@@ -21,8 +21,32 @@
 
 extern volatile u32 timer_lock;
 
+static s32 delay_wait_clear(u32 reg, u32 mask)
+{
+	u32 timeout = EXT_TIMER_POLL_LIMIT;
+
+	while (readl(reg) & mask) {
+		if (!--timeout)
+			return -ETIMEOUT;
+	}
+	return OK;
+}
+
+static s32 delay_wait_pending(u32 timer_no, u64 deadline)
+{
+	u32 pending = 1U << timer_no;
+
+	while (!(readl(EXT_TIMER_STA_REG) & pending)) {
+		if (cpucfg_counter_read() >= deadline)
+			return -ETIMEOUT;
+	}
+	return OK;
+}
+
 void time_mdelay(u32 ms)
 {
+	u64 ticks;
+	u64 deadline;
 	u32 value;
 
 	if (timer_lock)
@@ -32,37 +56,39 @@ void time_mdelay(u32 ms)
 	 * check delay time too long
 	 * ...
 	 */
-	if ((ms == 0) || (delay_timer->ms_ticks * ms >= 4294967296)) {
+	ticks = (u64)delay_timer->ms_ticks * ms;
+	if (!ms || ticks > 0xffffffffULL) {
 		/* no delay */
 		return;
 	}
 
 	/* config timer internal value */
-	writel(delay_timer->ms_ticks * ms, EXT_TIMER_IVL_REG(delay_timer->timer_no));
+	writel((u32)ticks, EXT_TIMER_IVL_REG(delay_timer->timer_no));
 
 	/*  reload interval value to current value */
 	value = readl(EXT_TIMER_CTRL_REG(delay_timer->timer_no));
-	value |= (1 << 1);
+	value |= EXT_TIMER_RELOAD;
 	writel(value, EXT_TIMER_CTRL_REG(delay_timer->timer_no));
-
-	while (readl(EXT_TIMER_CTRL_REG(delay_timer->timer_no)) & (1 << 1))
-		;
+	if (delay_wait_clear(EXT_TIMER_CTRL_REG(delay_timer->timer_no),
+			     EXT_TIMER_RELOAD) != OK)
+		return;
 
 	/* clear timer pending */
 	writel((1 << delay_timer->timer_no), EXT_TIMER_STA_REG);
 
 	/* start timer */
 	value = readl(EXT_TIMER_CTRL_REG(delay_timer->timer_no));
-	value |= 0x1;
+	value |= EXT_TIMER_ENABLE;
 	writel(value, EXT_TIMER_CTRL_REG(delay_timer->timer_no));
 
-	/* check timer pending valid or not */
-	while ((readl(EXT_TIMER_STA_REG) & (1 << delay_timer->timer_no)) == 0)
-		;
+	/* The always-on counter is 24 MHz; allow one extra millisecond. */
+	deadline = cpucfg_counter_read() + (u64)(ms + 1U) * 24000U;
+	if (delay_wait_pending(delay_timer->timer_no, deadline) != OK)
+		ERR("timer delay timeout: %d ms\n", ms);
 
 	/* stop timer */
 	value = readl(EXT_TIMER_CTRL_REG(delay_timer->timer_no));
-	value &= ~(0x1);
+	value &= ~EXT_TIMER_ENABLE;
 	writel(value, EXT_TIMER_CTRL_REG(delay_timer->timer_no));
 
 	/* clear timer pending */
@@ -79,7 +105,7 @@ void cnt64_udelay(u32 us)
 	}
 
 	/* calc expire time */
-	expire = (us * 24) + cpucfg_counter_read();
+	expire = (u64)us * 24U + cpucfg_counter_read();
 	while (expire > cpucfg_counter_read()) {
 		/* wait busy */
 		;

@@ -30,6 +30,30 @@ static struct timer timers[TIMERC_TIMERS_NUMBER] = {
 	{ 1, TIMER_FREE, INTC_R_TIMER1_IRQ, 0, NULL, NULL },
 };
 
+static s32 timer_wait_clear(u32 reg, u32 mask)
+{
+	u32 timeout = EXT_TIMER_POLL_LIMIT;
+
+	while (readl(reg) & mask) {
+		if (!--timeout)
+			return -ETIMEOUT;
+	}
+	return OK;
+}
+
+static s32 timer_ack_pending(struct timer *ptimer)
+{
+	u32 pending = 1U << ptimer->timer_no;
+	u32 timeout = EXT_TIMER_POLL_LIMIT;
+
+	writel(pending, EXT_TIMER_STA_REG);
+	while (readl(EXT_TIMER_STA_REG) & pending) {
+		if (!--timeout)
+			return -ETIMEOUT;
+	}
+	return OK;
+}
+
 
 /*
 *********************************************************************************************************
@@ -168,7 +192,14 @@ HANDLE timer_request(__pCBK_t phdle, void *parg)
 	}
 
 	/* install timer isr */
-	install_isr(ptimer->irq_no, timer_isr, (void *)ptimer);
+	if (install_isr(ptimer->irq_no, timer_isr, (void *)ptimer) != OK) {
+		cpsr = cpu_disable_int();
+		ptimer->status = TIMER_FREE;
+		ptimer->phandler = NULL;
+		ptimer->parg = NULL;
+		cpu_enable_int(cpsr);
+		return NULL;
+	}
 
 	return (HANDLE) ptimer;
 }
@@ -187,13 +218,25 @@ HANDLE timer_request(__pCBK_t phdle, void *parg)
 s32 timer_release(HANDLE htimer)
 {
 	struct timer *ptimer = (struct timer *)htimer;
+	u32 cpsr;
+	s32 ret;
 
 	ASSERT(ptimer != NULL);
+	if (!ptimer || ptimer == delay_timer || ptimer->status != TIMER_USED)
+		return -EINVAL;
 
-	/* set timer status as free */
+	ret = timer_stop(htimer);
+	if (ret != OK)
+		return ret;
+	ret = uninstall_isr(ptimer->irq_no, timer_isr);
+	if (ret != OK)
+		return ret;
+
+	cpsr = cpu_disable_int();
 	ptimer->status = TIMER_FREE;
 	ptimer->phandler = NULL;
 	ptimer->parg = NULL;
+	cpu_enable_int(cpsr);
 
 	return OK;
 }
@@ -214,44 +257,56 @@ s32 timer_release(HANDLE htimer)
 */
 s32 timer_start(HANDLE htimer, u32 period, u32 mode)
 {
+	u64 ticks;
 	u32 value;
+	s32 ret;
 
 	struct timer *ptimer = (struct timer *)htimer;
 
 	ASSERT(ptimer != NULL);
 
-	if (timer_lock)
+	if (timer_lock || ptimer->status != TIMER_USED)
 		return -EACCES;
+	if (!period || mode > TIMER_MODE_ONE_SHOOT)
+		return -EINVAL;
+	ticks = (u64)ptimer->ms_ticks * period;
+	if (ticks > 0xffffffffULL)
+		return -EINVAL;
 
 	/* set timer period */
-	writel((ptimer->ms_ticks * period), EXT_TIMER_IVL_REG(ptimer->timer_no));
+	writel((u32)ticks, EXT_TIMER_IVL_REG(ptimer->timer_no));
 
 	/* reload interval value to current value */
 	value = readl(EXT_TIMER_CTRL_REG(ptimer->timer_no));
-	value |= (1 << 1);
+	value |= EXT_TIMER_RELOAD;
 	writel(value, EXT_TIMER_CTRL_REG(ptimer->timer_no));
-
-	while (readl(EXT_TIMER_CTRL_REG(ptimer->timer_no)) & (1 << 1))
-		;
+	ret = timer_wait_clear(EXT_TIMER_CTRL_REG(ptimer->timer_no),
+			       EXT_TIMER_RELOAD);
+	if (ret != OK)
+		return ret;
 
 	/* set timer mode */
 	value = readl(EXT_TIMER_CTRL_REG(ptimer->timer_no));
-	value &= ~(1 << 7);
+	value &= ~EXT_TIMER_MODE;
 	value |= (mode << 7);
 	writel(value, EXT_TIMER_CTRL_REG(ptimer->timer_no));
 
 	/* clear timer pending */
-	writel((1 << ptimer->timer_no), EXT_TIMER_STA_REG);
+	ret = timer_ack_pending(ptimer);
+	if (ret != OK)
+		return ret;
 
 	/* enable timer interrupt */
 	value = readl(EXT_TIMER_IRQ_REG);
 	value |= (1 << ptimer->timer_no);
 	writel(value, EXT_TIMER_IRQ_REG);
-	interrupt_enable(ptimer->irq_no);
+	ret = interrupt_enable(ptimer->irq_no);
+	if (ret != OK)
+		return ret;
 
 	/* enable timer */
 	value = readl(EXT_TIMER_CTRL_REG(ptimer->timer_no));
-	value |= 0x1;
+	value |= EXT_TIMER_ENABLE;
 	writel(value, EXT_TIMER_CTRL_REG(ptimer->timer_no));
 
 	return OK;
@@ -276,24 +331,23 @@ s32 timer_stop(HANDLE htimer)
 
 	ASSERT(ptimer != NULL);
 
-	if (timer_lock)
+	if (timer_lock || ptimer->status != TIMER_USED)
 		return -EACCES;
 
 	/* disable timer */
 	value = readl(EXT_TIMER_CTRL_REG(ptimer->timer_no));
-	value &= ~(0x1);
+	value &= ~EXT_TIMER_ENABLE;
 	writel(value, EXT_TIMER_CTRL_REG(ptimer->timer_no));
 
 	/* disable timer irq */
 	value = readl(EXT_TIMER_IRQ_REG);
 	value &= ~(1 << ptimer->timer_no);
 	writel(value, EXT_TIMER_IRQ_REG);
-	interrupt_disable(ptimer->irq_no);
+	if (interrupt_disable(ptimer->irq_no) != OK)
+		return -EFAIL;
 
 	/* clear timer pending */
-	writel((1 << ptimer->timer_no), EXT_TIMER_STA_REG);
-
-	return OK;
+	return timer_ack_pending(ptimer);
 }
 
 /*
@@ -316,6 +370,10 @@ s32 timer_isr(void *parg)
 
 	/* check pending status valid or not */
 	if (readl(EXT_TIMER_STA_REG) & (1 << ptimer->timer_no)) {
+		/* TIMER_STA is W1C; acknowledge even if release raced the IRQ. */
+		if (timer_ack_pending(ptimer) != OK)
+			return -ETIMEOUT;
+
 		/* process the timer handler */
 		if (ptimer->phandler == NULL) {
 			WRN("timer irq handler not install\n");
@@ -324,9 +382,6 @@ s32 timer_isr(void *parg)
 
 		/* handler timer irq */
 		ptimer->phandler(ptimer->parg);
-
-		/* clear interrupt pending */
-		writel((1 << ptimer->timer_no), EXT_TIMER_STA_REG);
 
 		return TRUE;
 	}

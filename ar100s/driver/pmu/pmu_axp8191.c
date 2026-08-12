@@ -87,17 +87,26 @@ pmu_onoff_reg_bitmap_t axp8191_onoff_reg_bitmap[] = {
 	return 0;
 }
 
-static void _axp8191_pmu_softset(u8 val)
+static s32 _axp8191_pmu_softset(u8 val)
 {
 	u8 devaddr = RSB_RTSADDR_AXP8191;
 	u8 regaddr = AXP8191_POWER_DISABLE_POWER_DOWN_SEQUENCE;
-	u8 data;
+	u8 data = 0;
+	s32 ret;
 
 	save_state_flag(REC_SHUTDOWN | 0x300 | val);
 
-	pmu_reg_read(&devaddr, &regaddr, &data, 1);
+	ret = pmu_reg_read(&devaddr, &regaddr, &data, 1);
+	if (ret != OK) {
+		ERR("axp8191 softset read failed: %d\n", ret);
+		return ret;
+	}
 	data |= 1 << (7 - val);
-	pmu_reg_write(&devaddr, &regaddr, &data, 1);
+	ret = pmu_reg_write(&devaddr, &regaddr, &data, 1);
+	if (ret != OK) {
+		ERR("axp8191 softset write failed: %d\n", ret);
+		return ret;
+	}
 
 	if (val)
 		LOG("reset system\n");
@@ -106,62 +115,95 @@ static void _axp8191_pmu_softset(u8 val)
 
 	while (1)
 		;
+
+	return OK;
 }
 
 
-static void axp8191_pmu_shutdown(void)
+static s32 axp8191_pmu_shutdown(void)
 {
 	save_state_flag(REC_SHUTDOWN | 0x201);
 
 	bmu_shutdown();
-	_axp8191_pmu_softset(0);
+	return _axp8191_pmu_softset(0);
 }
 
-static void axp8191_pmu_reset(void)
+static s32 axp8191_pmu_reset(void)
 {
 	u8 devaddr = RSB_RTSADDR_AXP8191;
 	u8 regaddr = AXP8191_BUFFER0;
 	u8 data = SUNXI_REBOOT_FLAG_AXP8191;
+	s32 ret;
 
 	save_state_flag(REC_SHUTDOWN | 0x202);
 
 	bmu_reset();
-	pmu_reg_write(&devaddr, &regaddr, &data, 1);
+	ret = pmu_reg_write(&devaddr, &regaddr, &data, 1);
+	if (ret != OK) {
+		ERR("axp8191 reboot flag write failed: %d\n", ret);
+		return ret;
+	}
 
-	_axp8191_pmu_softset(1);
+	return _axp8191_pmu_softset(1);
 }
 
-static void axp8191_pmu_charging_reset(void)
+static s32 axp8191_pmu_charging_reset(void)
 {
 	u8 devaddr = RSB_RTSADDR_AXP8191;
 	u8 regaddr = AXP8191_BUFFER0;
 	u8 val;
+	s32 ret;
 
 	save_state_flag(REC_SHUTDOWN | 0x203);
 	val = _axp8191_vbus_check();
 	if (val) {
 		val = SUNXI_CHARGING_FLAG_AXP8191;
-		pmu_reg_write(&devaddr, &regaddr, &val, 1);
+		ret = pmu_reg_write(&devaddr, &regaddr, &val, 1);
+		if (ret != OK) {
+			ERR("axp8191 charging flag write failed: %d\n", ret);
+			return ret;
+		}
 		bmu_reset();
-		_axp8191_pmu_softset(1);
+		return _axp8191_pmu_softset(1);
 	}
+
+	return OK;
 }
 
 static s32 axp8191_pmu_set_voltage_state(u32 type, u32 state)
 {
 	u8 devaddr = RSB_RTSADDR_AXP8191;
 	u8 regaddr;
-	u8 data;
+	u8 data = 0;
 	u32 offset;
+	s32 ret;
+
+	if (type >= AXP8191_POWER_MAX || state > POWER_VOL_ON) {
+		ERR("invalid axp8191 rail request: type=%d state=%d\n",
+		    type, state);
+		return -EINVAL;
+	}
 
 	regaddr = axp8191_onoff_reg_bitmap[type].regaddr;
 	offset  = axp8191_onoff_reg_bitmap[type].offset;
+	if (!regaddr || offset >= 8) {
+		ERR("unsupported axp8191 rail: type=%d\n", type);
+		return -EINVAL;
+	}
 
 	//read-modify-write
-	pmu_reg_read(&devaddr, &regaddr, &data, 1);
+	ret = pmu_reg_read(&devaddr, &regaddr, &data, 1);
+	if (ret != OK) {
+		ERR("axp8191 rail %d read failed: %d\n", type, ret);
+		return ret;
+	}
 	data &= (~(1 << offset));
 	data |= (state << offset);
-	pmu_reg_write(&devaddr, &regaddr, &data, 1);
+	ret = pmu_reg_write(&devaddr, &regaddr, &data, 1);
+	if (ret != OK) {
+		ERR("axp8191 rail %d write failed: %d\n", type, ret);
+		return ret;
+	}
 
 	if (state == POWER_VOL_ON) {
 		//delay 1ms for open PMU output
@@ -177,4 +219,3 @@ pmu_ops_t pmu_axp8191_ops = {
 	.pmu_charging_reset = axp8191_pmu_charging_reset,
 	.pmu_set_voltage_state = axp8191_pmu_set_voltage_state,
 };
-
