@@ -22,6 +22,23 @@
 #define FDT_FIRST_SUPPORTED_VERSION 16U
 #define FDT_LAST_SUPPORTED_VERSION 17U
 
+#define SCP_BL2_MIN_SIZE 64U
+#define SCP_BL2_ENTRY_INSTRUCTION 0x30047073U
+#define SCP_BL2_TRACE_ADDR_HI 0x070902b7U
+#define SCP_BL2_TRACE_ADDR_LO 0x11c28293U
+#define SCP_BL2_TRACE_VALUE_HI 0xe9020337U
+#define SCP_BL2_TRACE_STORE 0xa0230305U
+#define SCP_BL2_ENTRY_PROLOGUE 0x40810062U
+
+#define BL31_MONITOR_HEADER_SIZE 0x1000U
+#define BL31_MONITOR_BRANCH 0xea0003feU
+#define BL31_MONITOR_LOAD_ADDRESS_OFFSET 0x2cU
+#define BL31_MIN_SIZE (BL31_MONITOR_HEADER_SIZE + sizeof(u32))
+
+#define BL33_MIN_SIZE 64U
+#define ARM_BRANCH_OPCODE_MASK 0xff000000U
+#define ARM_BRANCH_OPCODE 0xea000000U
+
 static const u8 scp_bl2_uuid[16] = {
 	0x97, 0x66, 0xfd, 0x3d, 0x89, 0xbe, 0xe8, 0x49,
 	0xae, 0x5d, 0x78, 0xa1, 0x40, 0x60, 0x82, 0x13,
@@ -62,6 +79,94 @@ static u32 get_be32(const u8 *src)
 {
 	return ((u32)src[0] << 24) | ((u32)src[1] << 16) |
 	       ((u32)src[2] << 8) | (u32)src[3];
+}
+
+static int bytes_equal(const u8 *left, const u8 *right, size_t size)
+{
+	size_t i;
+
+	for (i = 0; i < size; i++) {
+		if (left[i] != right[i])
+			return 0;
+	}
+	return 1;
+}
+
+static int scp_bl2_is_valid(const u8 *bytes,
+			    const struct sunxi_fip_image *image)
+{
+	const u8 *entry;
+
+	if ((image->offset & (sizeof(u32) - 1U)) ||
+	    image->size < SCP_BL2_MIN_SIZE)
+		return 0;
+
+	entry = bytes + image->offset;
+	/*
+	 * Current A733 E902 reset ABI: mask MIE, publish the first GP7
+	 * breadcrumb, then begin clearing the integer register file.
+	 */
+	return get_le32(entry) == SCP_BL2_ENTRY_INSTRUCTION &&
+	       get_le32(entry + 4U) == SCP_BL2_TRACE_ADDR_HI &&
+	       get_le32(entry + 8U) == SCP_BL2_TRACE_ADDR_LO &&
+	       get_le32(entry + 12U) == SCP_BL2_TRACE_VALUE_HI &&
+	       get_le32(entry + 16U) == SCP_BL2_TRACE_STORE &&
+	       get_le32(entry + 20U) == SCP_BL2_ENTRY_PROLOGUE;
+}
+
+static int bl31_is_valid(const u8 *bytes,
+			 const struct sunxi_fip_image *image)
+{
+	static const u8 monitor_magic[8] = {
+		'm', 'o', 'n', 'i', 't', 'o', 'r', 0,
+	};
+	const u8 *monitor;
+	u32 code_entry;
+
+	if (image->size < BL31_MIN_SIZE)
+		return 0;
+
+	monitor = bytes + image->offset;
+	code_entry = get_le32(monitor + BL31_MONITOR_HEADER_SIZE);
+	return get_le32(monitor) == BL31_MONITOR_BRANCH &&
+	       bytes_equal(monitor + sizeof(u32), monitor_magic,
+			   sizeof(monitor_magic)) &&
+	       get_le32(monitor + BL31_MONITOR_LOAD_ADDRESS_OFFSET) ==
+			SUNXI_FIP_BL31_BASE &&
+	       code_entry != 0U && code_entry != 0xffffffffU;
+}
+
+static int bl33_is_valid(const u8 *bytes,
+			 const struct sunxi_fip_image *image)
+{
+	u32 instruction;
+	s32 immediate;
+	s64 target;
+
+	if (image->size < BL33_MIN_SIZE)
+		return 0;
+
+	instruction = get_le32(bytes + image->offset);
+	if ((instruction & ARM_BRANCH_OPCODE_MASK) != ARM_BRANCH_OPCODE)
+		return 0;
+
+	immediate = (s32)(instruction & 0x00ffffffU);
+	if (immediate & 0x00800000)
+		immediate -= 0x01000000;
+	target = 8 + (s64)immediate * 4;
+	return target >= 0 && (u64)target + sizeof(u32) <= image->size;
+}
+
+static int layout_is_loadable(const u8 *bytes,
+			      const struct sunxi_fip_layout *layout)
+{
+	return layout->bl31.size <= SUNXI_FIP_BL31_MAX_SIZE &&
+	       layout->bl33.size <= SUNXI_FIP_BL33_MAX_SIZE &&
+	       layout->scp_bl2.size <= SUNXI_FIP_SCP_BL2_MAX_SIZE &&
+	       layout->hw_config.size <= SUNXI_FIP_HW_CONFIG_MAX_SIZE &&
+	       scp_bl2_is_valid(bytes, &layout->scp_bl2) &&
+	       bl31_is_valid(bytes, &layout->bl31) &&
+	       bl33_is_valid(bytes, &layout->bl33);
 }
 
 static int hw_config_is_valid(const u8 *fdt, size_t image_size)
@@ -213,6 +318,8 @@ int sunxi_fip_parse(const void *image, size_t image_size,
 			    !hw_config_is_valid(bytes + layout->hw_config.offset,
 						layout->hw_config.size))
 				return -1;
+			if (!layout_is_loadable(bytes, layout))
+				return -1;
 			return 0;
 		}
 		if (entry_uuid_seen(bytes, entry, entry_count))
@@ -246,22 +353,13 @@ int sunxi_fip_parse(const void *image, size_t image_size,
 	return -1;
 }
 
-static int layout_is_loadable(const struct sunxi_fip_layout *layout)
-{
-	return layout->bl31.size <= SUNXI_FIP_BL31_MAX_SIZE &&
-	       layout->bl33.size <= SUNXI_FIP_BL33_MAX_SIZE &&
-	       layout->scp_bl2.size <= SUNXI_FIP_SCP_BL2_MAX_SIZE &&
-	       layout->hw_config.size <= SUNXI_FIP_HW_CONFIG_MAX_SIZE;
-}
-
 int sunxi_fip_copy_images(const void *image, size_t image_size,
 			  sunxi_fip_copy_fn copy, void *context)
 {
 	const u8 *bytes = image;
 	struct sunxi_fip_layout layout;
 
-	if (!copy || sunxi_fip_parse(image, image_size, &layout) != 0 ||
-	    !layout_is_loadable(&layout))
+	if (!copy || sunxi_fip_parse(image, image_size, &layout) != 0)
 		return -1;
 	if (copy(SUNXI_FIP_BL31_BASE, bytes + layout.bl31.offset,
 		 layout.bl31.size, context) != 0)
@@ -342,8 +440,7 @@ int sunxi_fip_read_image(u32 start_sector, void *buffer, size_t capacity,
 	sector_count = (declared_size + FIP_SECTOR_SIZE - 1) / FIP_SECTOR_SIZE;
 	if (read(start_sector, sector_count, buffer, context) != 1)
 		return -1;
-	if (sunxi_fip_parse(buffer, declared_size, &layout) != 0 ||
-	    !layout_is_loadable(&layout))
+	if (sunxi_fip_parse(buffer, declared_size, &layout) != 0)
 		return -1;
 
 	*fip_size = declared_size;

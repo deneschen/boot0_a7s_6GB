@@ -68,14 +68,19 @@
 #define SUNXI_RISCV_24M_CLK_REG          (SUNXI_RPRCM_BASE + 0x0210)
 #define SUNXI_RISCV_BGR_REG              (SUNXI_RPRCM_BASE + 0x021c)
 #define SUNXI_E902_RST_START_ADDR_REG    (0x07032000 + 0x0204)
+#define SUNXI_E902_RESET_CTRL_REG        (0x07050000 + 0x0008)
 #define SUNXI_RTC_DTB_BASE_STORE_REG     (SUNXI_RTC_BASE + 0x010c)
+#define SUNXI_AR100S_BOOT0_TRACE_REG      (SUNXI_RTC_BASE + 0x0118)
+#define SUNXI_AR100S_E902_TRACE_REG       (SUNXI_RTC_BASE + 0x011c)
 #define SUNXI_E902_RESET_VECTOR          (0x40004000)
+#define SUNXI_AR100S_BOOT0_TRACE_MAGIC    (0xb0070000)
 
 #define RISCV_CLK_GATING                 (1U << 31)
 #define RISCV_CLK_SOURCE_MASK            (3U << 24)
 #define RISCV_CFG_RESET                  (1U << 16)
 #define RISCV_CFG_GATING                 (1U << 1)
 #define RISCV_BUS_GATING                 (1U << 0)
+#define E902_RESET_DEASSERT              (1U << 0)
 
 
 /* boot run addr */

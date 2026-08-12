@@ -8,8 +8,6 @@
 #include <clock_diag_a733.h>
 #include <private_boot0.h>
 #include <private_uboot.h>
-#include <private_toc.h>
-#include <private_tee.h>
 #include <arch/clock.h>
 #include <arch/uart.h>
 #include <arch/dram.h>
@@ -20,6 +18,7 @@
 #include <boot_param.h>
 #include <sunxi_fip.h>
 #include <sunxi_flashmap.h>
+#include <hw_config_a733.h>
 
 #ifndef CONFIG_SUNXI_FIP
 #error "This A733 boot0 build requires the FIP-only boot path"
@@ -52,23 +51,18 @@
 #error "A733 HW_CONFIG and BL33 load windows overlap"
 #endif
 
-__u8 uboot_backup;
-
 struct fip_boot_images {
 	const void *scp_source;
 	u32 scp_size;
 	u32 dtb_base;
+	u32 dtb_size;
 };
 
 extern const u8 fip_handoff_start[];
 extern const u8 fip_handoff_end[];
 
-static void update_uboot_info(phys_addr_t uboot_base, phys_addr_t optee_base,
-		phys_addr_t monitor_base, phys_addr_t rtos_base, u32 dram_size,
-		u32 boot_package_size, u16 pmu_type, u16 uart_input, u16 key_input);
 static int load_fip_images(phys_addr_t *uboot_base,
-		phys_addr_t *monitor_base, u32 *boot_package_size,
-		struct fip_boot_images *images);
+		phys_addr_t *monitor_base, struct fip_boot_images *images);
 static int run_fip_handoff(const struct fip_boot_images *images);
 static int boot0_clear_env(void);
 __maybe_unused int load_kernel_from_spinor(u32 *);
@@ -87,11 +81,8 @@ void main(void)
 {
 	int dram_size;
 	int status;
-	u32 boot_package_size = 0;
 	struct fip_boot_images fip_images = { 0 };
-	phys_addr_t  uboot_base = 0, optee_base = 0, monitor_base = 0, \
-				rtos_base = 0, opensbi_base = 0, cpus_rtos_base = 0;
-	u16 pmu_type = 0, key_input = 0; /* TODO: set real value */
+	phys_addr_t uboot_base = 0, monitor_base = 0;
 
 	a7s_early_uart_init();
 	a7s_early_uart_puts("\r\nA7S BOOT0: early uart0 alive\r\n");
@@ -170,26 +161,21 @@ void main(void)
 	if (status)
 		goto _BOOT_ERROR;
 
-	status = load_fip_images(&uboot_base, &monitor_base,
-				 &boot_package_size, &fip_images);
+	status = load_fip_images(&uboot_base, &monitor_base, &fip_images);
 	if (status != 0)
 		goto _BOOT_ERROR;
 
-	update_uboot_info(uboot_base, optee_base, monitor_base, rtos_base, dram_size,
-			boot_package_size, pmu_type, uart_input_value, key_input);
-
-	if (load_and_run_fastboot(uboot_base, optee_base, monitor_base, rtos_base, opensbi_base, cpus_rtos_base))
-		goto _BOOT_ERROR;
-
 	/*
-	 * Patch the monitor header with the BL33 load address. Do not call
+	 * BL33 is a raw mainline U-Boot image whose first byte is executable
+	 * code, not a vendor spare header. Treat it as immutable and only pass
+	 * its load address through the monitor header. Do not call
 	 * v7_flush_dcache_all()/mmu_disable() here: on this A733 boot path the
 	 * vendor flush hangs, and RMR restarts the CPU in a clean MMU state.
 	 */
 	if (monitor_base) {
 		struct spare_monitor_head *monitor_head =
 			(struct spare_monitor_head *)(phys_addr_t)monitor_base;
-		monitor_head->secureos_base = optee_base;
+		monitor_head->secureos_base = 0;
 		monitor_head->nboot_base = uboot_base;
 	}
 
@@ -226,14 +212,15 @@ static int fip_copy_image(u32 destination, const void *source, size_t size,
 	}
 
 	memcpy((void *)(phys_addr_t)destination, source, size);
-	if (destination == SUNXI_FIP_HW_CONFIG_BASE)
+	if (destination == SUNXI_FIP_HW_CONFIG_BASE) {
 		images->dtb_base = destination;
+		images->dtb_size = size;
+	}
 	return 0;
 }
 
 static int load_fip_images(phys_addr_t *uboot_base,
-		phys_addr_t *monitor_base, u32 *boot_package_size,
-		struct fip_boot_images *images)
+		phys_addr_t *monitor_base, struct fip_boot_images *images)
 {
 	size_t fip_size = 0;
 	u32 primary_sector;
@@ -262,14 +249,23 @@ static int load_fip_images(phys_addr_t *uboot_base,
 		printf("FIP: SCP_BL2 was not loaded\n");
 		return -1;
 	}
+	if (images->dtb_base &&
+	    a733_hw_config_update_dram(
+			(void *)(phys_addr_t)images->dtb_base,
+			images->dtb_size,
+			sunxi_bootparam_get_dram_buf()->dram_para,
+			MAX_DRAMPARA_SIZE) != 0) {
+		printf("FIP: invalid AR100S HW_CONFIG; disabling DTB services\n");
+		images->dtb_base = 0;
+		images->dtb_size = 0;
+	} else if (images->dtb_base) {
+		printf("FIP: patched 96 trained DRAM parameters into HW_CONFIG\n");
+	}
 
 	*uboot_base = CONFIG_UBOOT_BASE;
 	*monitor_base = CONFIG_MONITOR_BASE;
-	*boot_package_size = (u32)fip_size;
-	uboot_backup = used_sector != primary_sector &&
-			used_sector == backup_sector ? UBOOTB : UBOOTA;
 	printf("FIP: loaded sector=%u, size=%u\n", used_sector,
-	       *boot_package_size);
+	       (u32)fip_size);
 	return 0;
 }
 
@@ -345,6 +341,8 @@ static int run_fip_handoff(const struct fip_boot_images *images)
 	clean_dcache_range(CONFIG_MONITOR_BASE, SUNXI_FIP_BL31_MAX_SIZE);
 	clean_dcache_range(CONFIG_UBOOT_BASE, SUNXI_FIP_BL33_MAX_SIZE);
 	clean_dcache_range((unsigned long)images->scp_source, images->scp_size);
+	if (images->dtb_base)
+		clean_dcache_range(images->dtb_base, images->dtb_size);
 	invalidate_instruction_cache();
 
 	printf("FIP: handoff scp=%u dtb=0x%x entry=0x%x dest=0x%x\n",
@@ -354,55 +352,6 @@ static int run_fip_handoff(const struct fip_boot_images *images)
 	handoff = (fip_handoff_fn)(phys_addr_t)(CONFIG_FIP_HANDOFF_BASE | 1U);
 	handoff(images->scp_source, images->scp_size, images->dtb_base);
 	return -1;
-}
-
-static void update_uboot_info(phys_addr_t uboot_base, phys_addr_t optee_base,
-		phys_addr_t monitor_base, phys_addr_t rtos_base, u32 dram_size,
-		u32 boot_package_size, u16 pmu_type, u16 uart_input, u16 key_input)
-{
-	if (rtos_base)
-		return;
-
-	uboot_head_t  *header = (uboot_head_t *) uboot_base;
-	if (uboot_base) {
-
-#ifdef CFG_SUNXI_BOOT_PARAM
-		sunxi_bootparam_format_and_transfer(
-			(void *)(uboot_base + SUNXI_BOOTPARAM_OFFSET));
-#endif
-
-		header->boot_data.boot_package_size = boot_package_size;
-		header->boot_data.dram_scan_size = dram_size;
-		memcpy((void *)header->boot_data.dram_para,
-			(void *)sunxi_bootparam_get_dram_buf(), 32 * sizeof(int));
-
-		if (monitor_base)
-			header->boot_data.monitor_exist = 1;
-
-		if (optee_base) {
-			struct spare_optee_head *tee_head =
-				(struct spare_optee_head *)optee_base;
-			header->boot_data.secureos_exist = 1;
-			tee_head->dram_size		 = dram_size;
-			tee_head->drm_size = BT0_head.secure_dram_mbytes;
-			tee_head->uart_port = BT0_head.prvt_head.uart_port;
-		}
-
-#ifndef CONFIG_RISCV
-		header->boot_data.func_mask |= get_uboot_func_mask(UBOOT_FUNC_MASK_ALL);
-#endif
-		update_flash_para(uboot_base);
-
-		header->boot_data.uart_port = BT0_head.prvt_head.uart_port;
-		memcpy((void *)header->boot_data.uart_gpio, BT0_head.prvt_head.uart_ctrl, 2*sizeof(normal_gpio_cfg));
-		header->boot_data.pmu_type = pmu_type;
-		header->boot_data.uart_input = uart_input;
-		header->boot_data.key_input = key_input;
-		header->boot_data.debug_mode = sunxi_get_debug_mode_for_uboot();
-		if (get_card_work_mode() != NOUSE_CARDMODE)
-			header->boot_data.work_mode = get_card_work_mode();
-		header->boot_data.uboot_backup = uboot_backup;
-	}
 }
 
 static int boot0_clear_env(void)

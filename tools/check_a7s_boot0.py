@@ -71,6 +71,16 @@ EXPECTED_EARLY_UART_MARKERS = [
     b"A7S BOOT0: early uart0 alive\r\n",
 ]
 
+EXPECTED_AR100S_TRACE_CONSTANTS = (
+    0x07010210,
+    0x0701021C,
+    0x07032204,
+    0x07050008,
+    0x07090118,
+    0x0709011C,
+    0xB0070000,
+)
+
 EXPECTED_SDMMC_GPIOS = [
     (6, 2, 2, 1, 1, 0xFF),
     (6, 3, 2, 1, 1, 0xFF),
@@ -103,6 +113,11 @@ REQUIRED_FIP_SYMBOLS = [
 FORBIDDEN_TOC1_LOADER_SYMBOLS = [
     "load_package",
     "load_image",
+]
+
+FORBIDDEN_VENDOR_BL33_MUTATOR_SYMBOLS = [
+    "load_and_run_fastboot",
+    "update_flash_para",
 ]
 
 
@@ -189,6 +204,10 @@ def validate_image(image: Path) -> None:
         if marker not in buf:
             fail(f"early UART marker {marker!r} is missing from the image")
 
+    for value in EXPECTED_AR100S_TRACE_CONSTANTS:
+        if struct.pack("<I", value) not in buf:
+            fail(f"AR100S boot trace constant 0x{value:08x} is missing")
+
     if gpio_array(buf, STORAGE_GPIO_OFF, 6) != EXPECTED_SDMMC_GPIOS:
         fail("SD/MMC GPIO table does not match the A7S card0 boot pins")
 
@@ -243,6 +262,10 @@ def validate_map(map_file: Path) -> None:
     for symbol in FORBIDDEN_TOC1_LOADER_SYMBOLS:
         if linked_symbol(text, symbol):
             fail(f"link map still includes the legacy TOC1 loader symbol {symbol}")
+
+    for symbol in FORBIDDEN_VENDOR_BL33_MUTATOR_SYMBOLS:
+        if linked_symbol(text, symbol):
+            fail(f"link map still includes the vendor BL33 mutator {symbol}")
 
 
 def main() -> None:

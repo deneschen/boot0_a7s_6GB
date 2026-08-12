@@ -47,7 +47,9 @@ BOOT0SIZE := 0x40000
 INC := -I$(TOP)/include \
        -I$(TOP)/include/arch/arm \
        -I$(TOP)/include/configs \
-       -I$(TOP)/include/arch/$(PLATFORM)
+       -I$(TOP)/include/arch/$(PLATFORM) \
+       -I$(TOP)/ar100s/library/libfdt/include \
+       -I$(TOP)/ar100s/library/libfdt
 
 LIBGCCINC := -isystem $(shell dirname `$(CC) -print-libgcc-file-name`)/include
 
@@ -75,7 +77,7 @@ COMM_FLAGS := -nostdinc $(LIBGCCINC) $(INC) \
 # state, while compiling the board-specific C wrappers as Thumb-2 to reduce
 # their footprint; -mthumb-interwork lets the linker create the required
 # state-switch veneers at the assembly/C boundary.
-CFLAGS := $(COMM_FLAGS) -mthumb -fdata-sections
+CFLAGS := $(COMM_FLAGS) -mthumb -fdata-sections -MMD -MP
 AFLAGS := $(COMM_FLAGS) -D__ASSEMBLY__
 
 LDFLAGS_GC := --gc-sections
@@ -90,7 +92,12 @@ OBJS := $(BUILD)/boot0_entry.o \
         $(BUILD)/early_uart.o \
         $(BUILD)/clock_a733.o \
         $(BUILD)/clock_diag_a733.o \
+	$(BUILD)/axp8191_voltage.o \
         $(BUILD)/boot0_main.o \
+        $(BUILD)/hw_config_a733.o \
+        $(BUILD)/libfdt_fdt.o \
+        $(BUILD)/libfdt_fdt_ro.o \
+        $(BUILD)/libfdt_fdt_wip.o \
         $(BUILD)/sunxi_fip.o \
         $(BUILD)/platform_shims.o
 
@@ -107,6 +114,9 @@ OBJS := $(BUILD)/boot0_entry.o \
 BLOBS := $(TOP)/blobs/libdram.o \
          $(BUILD)/board_sdcard.o
 
+DEPFILES := $(filter-out $(BUILD)/board_sdcard.d,$(OBJS:.o=.d))
+-include $(DEPFILES)
+
 LDS_IN  := $(TOP)/arch/armv7/boot0.lds
 LDS_OUT := $(BUILD)/boot0.lds
 
@@ -114,11 +124,20 @@ NAME := boot0_sdcard_$(PLATFORM)
 FIPTOOL_TEST_IMAGE := $(BUILD)/test_fiptool.bin
 FIPTOOL_TEST_IMAGE_NO_DTB := $(BUILD)/test_fiptool_no_dtb.bin
 FIPTOOL_TEST_DTB := $(BUILD)/test_hw_config.dtb
+FIPTOOL_TEST_PAYLOAD_GEN := $(TOP)/tests/gen_fip_test_payload.py
+FIPTOOL_TEST_SCP := $(BUILD)/test_fiptool_scp.bin
+FIPTOOL_TEST_BL31 := $(BUILD)/test_fiptool_bl31.bin
+FIPTOOL_TEST_BL33 := $(BUILD)/test_fiptool_bl33.bin
+FIPTOOL_TEST_PAYLOADS := $(FIPTOOL_TEST_SCP) $(FIPTOOL_TEST_BL31) \
+	$(FIPTOOL_TEST_BL33)
 SANITIZED_FIP_TEST := $(BUILD)/test_sunxi_fip_sanitize
 CLOCK_TEST := $(BUILD)/test_clock_a733
+A7S_HW_CONFIG_DTB := $(BUILD)/a7s-ar100s-hw-config.dtb
+HW_CONFIG_TEST := $(BUILD)/test_hw_config_a733
+AXP8191_VOLTAGE_TEST := $(BUILD)/test_axp8191_voltage
 
 .PHONY: all clean test test-sanitize test-fiptool verify scp scp-clean \
-	uboot verify-all
+	uboot hw-config verify-all
 all: $(BUILD)/$(NAME).bin
 
 # ---- U-Boot BL33 ------------------------------------------------------------
@@ -144,9 +163,15 @@ scp-clean:
 	-$(TOP)/ar100s/build.sh clean
 	rm -f $(BUILD)/scp.bin $(BUILD)/scp.elf
 
-test: $(BUILD)/test_sunxi_fip $(CLOCK_TEST)
+hw-config: $(A7S_HW_CONFIG_DTB)
+
+test: $(BUILD)/test_sunxi_fip $(CLOCK_TEST) $(HW_CONFIG_TEST) \
+		$(AXP8191_VOLTAGE_TEST) \
+		$(A7S_HW_CONFIG_DTB)
 	$(BUILD)/test_sunxi_fip
 	$(CLOCK_TEST)
+	$(HW_CONFIG_TEST) $(A7S_HW_CONFIG_DTB)
+	$(AXP8191_VOLTAGE_TEST)
 
 test-sanitize: $(SANITIZED_FIP_TEST)
 	ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 $<
@@ -178,23 +203,58 @@ $(CLOCK_TEST): $(TOP)/tests/test_clock_a733.c \
 		-o $@ $(TOP)/tests/test_clock_a733.c $(TOP)/src/clock_a733.c \
 		$(TOP)/src/clock_diag_a733.c
 
+$(A7S_HW_CONFIG_DTB): $(TOP)/hwconfig/a7s-ar100s.dts | $(BUILD)
+	$(DTC) -I dts -O dtb -o $@ $<
+
+$(HW_CONFIG_TEST): $(TOP)/tests/test_hw_config_a733.c \
+			   $(TOP)/src/hw_config_a733.c \
+			   $(TOP)/include/hw_config_a733.h \
+			   $(TOP)/ar100s/library/libfdt/fdt.c \
+			   $(TOP)/ar100s/library/libfdt/fdt_ro.c \
+			   $(TOP)/ar100s/library/libfdt/fdt_wip.c | $(BUILD)
+	$(HOSTCC) -std=c11 -Wall -Wextra -Werror \
+		-D_POSIX_C_SOURCE=200809L -Wno-sign-compare \
+		-I$(TOP)/ar100s/library/libfdt/include \
+		-I$(TOP)/ar100s/library/libfdt -I$(TOP)/include \
+		-o $@ $(TOP)/tests/test_hw_config_a733.c \
+		$(TOP)/src/hw_config_a733.c \
+		$(TOP)/ar100s/library/libfdt/fdt.c \
+		$(TOP)/ar100s/library/libfdt/fdt_ro.c \
+		$(TOP)/ar100s/library/libfdt/fdt_wip.c
+
+$(AXP8191_VOLTAGE_TEST): $(TOP)/tests/test_axp8191_voltage.c \
+					$(TOP)/src/axp8191_voltage.c \
+					$(TOP)/include/axp8191_voltage.h | $(BUILD)
+	$(HOSTCC) -std=c11 -Wall -Wextra -Werror -I$(TOP)/include \
+		-o $@ $(TOP)/tests/test_axp8191_voltage.c \
+		$(TOP)/src/axp8191_voltage.c
+
+$(FIPTOOL_TEST_SCP): $(FIPTOOL_TEST_PAYLOAD_GEN) | $(BUILD)
+	python3 $< scp $@
+
+$(FIPTOOL_TEST_BL31): $(FIPTOOL_TEST_PAYLOAD_GEN) | $(BUILD)
+	python3 $< bl31 $@
+
+$(FIPTOOL_TEST_BL33): $(FIPTOOL_TEST_PAYLOAD_GEN) | $(BUILD)
+	python3 $< bl33 $@
+
 ifneq ($(wildcard $(FIPTOOL)),)
 $(FIPTOOL_TEST_IMAGE): $(BUILD)/test_sunxi_fip \
-			       $(TOP)/tests/test_sunxi_fip.c \
-			       $(FIPTOOL_TEST_DTB) $(FIPTOOL) | $(BUILD)
+				       $(FIPTOOL_TEST_PAYLOADS) \
+				       $(FIPTOOL_TEST_DTB) $(FIPTOOL) | $(BUILD)
 	$(FIPTOOL) create --align 512 \
-		--scp-fw $(TOP)/tests/test_sunxi_fip.c \
-		--soc-fw $(TOP)/tests/test_sunxi_fip.c \
-		--nt-fw $(TOP)/tests/test_sunxi_fip.c \
+		--scp-fw $(FIPTOOL_TEST_SCP) \
+		--soc-fw $(FIPTOOL_TEST_BL31) \
+		--nt-fw $(FIPTOOL_TEST_BL33) \
 		--hw-config $(FIPTOOL_TEST_DTB) $@
 
 $(FIPTOOL_TEST_IMAGE_NO_DTB): $(BUILD)/test_sunxi_fip \
-				      $(TOP)/tests/test_sunxi_fip.c \
-				      $(FIPTOOL) | $(BUILD)
+					      $(FIPTOOL_TEST_PAYLOADS) \
+					      $(FIPTOOL) | $(BUILD)
 	$(FIPTOOL) create --align 512 \
-		--scp-fw $(TOP)/tests/test_sunxi_fip.c \
-		--soc-fw $(TOP)/tests/test_sunxi_fip.c \
-		--nt-fw $(TOP)/tests/test_sunxi_fip.c $@
+		--scp-fw $(FIPTOOL_TEST_SCP) \
+		--soc-fw $(FIPTOOL_TEST_BL31) \
+		--nt-fw $(FIPTOOL_TEST_BL33) $@
 
 $(FIPTOOL_TEST_DTB): $(TOP)/tests/test_hw_config.dts | $(BUILD)
 	$(DTC) -I dts -O dtb -o $@ $<
@@ -226,6 +286,19 @@ $(BUILD)/boot0_main.o: $(TOP)/src/boot0_main.c \
 			       $(TOP)/include/configs/sun60iw2p1.h | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+$(BUILD)/hw_config_a733.o: $(TOP)/src/hw_config_a733.c \
+				 $(TOP)/include/hw_config_a733.h | $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/libfdt_fdt.o: $(TOP)/ar100s/library/libfdt/fdt.c | $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/libfdt_fdt_ro.o: $(TOP)/ar100s/library/libfdt/fdt_ro.c | $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/libfdt_fdt_wip.o: $(TOP)/ar100s/library/libfdt/fdt_wip.c | $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 $(BUILD)/early_uart.o: $(TOP)/src/early_uart.c | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -243,7 +316,12 @@ $(BUILD)/sunxi_fip.o: $(TOP)/src/sunxi_fip.c \
 			      $(TOP)/include/sunxi_fip.h | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/platform_shims.o: $(TOP)/src/platform_shims.c | $(BUILD)
+$(BUILD)/axp8191_voltage.o: $(TOP)/src/axp8191_voltage.c \
+				  $(TOP)/include/axp8191_voltage.h | $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/platform_shims.o: $(TOP)/src/platform_shims.c \
+				  $(TOP)/include/axp8191_voltage.h | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # Export the blob's local MMC device table so the real-silicon registration

@@ -23,29 +23,10 @@ fip_handoff_start:
 	mov	r8, r2			/* validated HW_CONFIG address */
 
 	/* Hold AR100S in reset before replacing its SRAM image. */
-	ldr	r3, =SUNXI_RCPUCFG_BASE
+	ldr	r3, =SUNXI_E902_RESET_CTRL_REG
 	ldr	r4, [r3]
-	bic	r4, r4, #1
+	bic	r4, r4, #E902_RESET_DEASSERT
 	dmb	sy
-	str	r4, [r3]
-	dsb	sy
-
-	/* Enable the documented E902 clock and configuration bus. */
-	ldr	r3, =SUNXI_RISCV_24M_CLK_REG
-	ldr	r4, [r3]
-	bic	r4, r4, #RISCV_CLK_SOURCE_MASK
-	orr	r4, r4, #RISCV_CLK_GATING
-	str	r4, [r3]
-	dsb	sy
-
-	/* Keep configuration reset asserted while opening both bus gates. */
-	ldr	r3, =SUNXI_RISCV_BGR_REG
-	ldr	r4, [r3]
-	bic	r4, r4, #RISCV_CFG_RESET
-	orr	r4, r4, #(RISCV_CFG_GATING | RISCV_BUS_GATING)
-	str	r4, [r3]
-	dsb	sy
-	orr	r4, r4, #RISCV_CFG_RESET
 	str	r4, [r3]
 	dsb	sy
 
@@ -78,22 +59,65 @@ fip_handoff_start:
 	bne	3b
 
 4:
+	/*
+	 * The MMU and D-cache are still enabled. Publish the SRAM clear/copy
+	 * before releasing E902; the C-side clean only covers the FIP source.
+	 */
+	ldr	r3, =SCP_SRAM_BASE
+	ldr	r5, =SCP_SRAM_SIZE
+	add	r5, r3, r5
+	bic	r3, r3, #31
+6:
+	mcr	p15, 0, r3, c7, c10, 1
+	add	r3, r3, #32
+	cmp	r3, r5
+	blo	6b
+	dsb	sy
+
 	/* Publish startup inputs before releasing E902. */
 	ldr	r3, =SUNXI_RTC_DTB_BASE_STORE_REG
 	str	r8, [r3]
+	ldr	r3, =SUNXI_AR100S_BOOT0_TRACE_REG
+	ldr	r4, =SUNXI_AR100S_BOOT0_TRACE_MAGIC
+	str	r4, [r3]
+	ldr	r3, =SUNXI_AR100S_E902_TRACE_REG
+	movs	r4, #0
+	str	r4, [r3]
+
+	/* Reproduce the A733 vendor BL31 E902 release sequence exactly. */
+	ldr	r3, =SUNXI_RISCV_BGR_REG
+	ldr	r4, =(RISCV_CFG_RESET | RISCV_CFG_GATING | RISCV_BUS_GATING)
+	str	r4, [r3]
+	dsb	sy
+
 	ldr	r3, =SUNXI_E902_RST_START_ADDR_REG
 	ldr	r4, =SUNXI_E902_RESET_VECTOR
 	str	r4, [r3]
 	dsb	sy
-	isb	sy
 
-	ldr	r3, =SUNXI_RCPUCFG_BASE
+	ldr	r3, =SUNXI_E902_RESET_CTRL_REG
 	ldr	r4, [r3]
-	orr	r4, r4, #1
+	orr	r4, r4, #E902_RESET_DEASSERT
 	dmb	sy
 	str	r4, [r3]
 	dsb	sy
+
+	ldr	r3, =SUNXI_RISCV_24M_CLK_REG
+	ldr	r4, [r3]
+	orr	r4, r4, #RISCV_CLK_GATING
+	str	r4, [r3]
+	dsb	sy
 	isb	sy
+
+	/* Preserve the real secure-state E902 reset readback for diagnosis. */
+	ldr	r3, =SUNXI_E902_RESET_CTRL_REG
+	ldr	r4, [r3]
+	and	r4, r4, #E902_RESET_DEASSERT
+	ldr	r5, =SUNXI_AR100S_BOOT0_TRACE_MAGIC
+	orr	r4, r4, r5
+	ldr	r3, =SUNXI_AR100S_BOOT0_TRACE_REG
+	str	r4, [r3]
+	dsb	sy
 
 	/*
 	 * Program INITARCH + both RVBAR aliases to the real AArch64 BL31
