@@ -71,7 +71,8 @@ s32 hwmsgbox_exit(void)
 
 s32 hwmsgbox_wait_queue_not_full(u32 queue, u32 timeout)
 {
-	while (readl(MSGBOX_RISC_TO_ARM_MSG_STATUS_REG(queue)) == 8) {
+	while (readl(MSGBOX_RISC_TO_ARM_MSG_STATUS_REG(queue)) ==
+	       HWMSGBOX_FIFO_DEPTH) {
 		/*
 		 * message-queue fifo is full,
 		 * wait 1ms for message-queue process.
@@ -82,6 +83,22 @@ s32 hwmsgbox_wait_queue_not_full(u32 queue, u32 timeout)
 		time_mdelay(1);
 		timeout--;
 	}
+	return OK;
+}
+
+static s32 hwmsgbox_wait_queue_space(u32 queue, u32 words, u32 timeout)
+{
+	if (words > HWMSGBOX_FIFO_DEPTH)
+		return -EINVAL;
+
+	while (readl(MSGBOX_RISC_TO_ARM_MSG_STATUS_REG(queue)) >
+	       HWMSGBOX_FIFO_DEPTH - words) {
+		if (timeout == 0)
+			return -ETIMEOUT;
+		time_mdelay(1);
+		timeout--;
+	}
+
 	return OK;
 }
 
@@ -118,6 +135,7 @@ s32 hwmsgbox_send_message(struct message *pmessage, u32 timeout)
 	s32 ret;
 	u32 i;
 	u32 value;
+	u32 frame_words;
 	u32 response_capacity;
 	u32 response_count;
 
@@ -125,6 +143,21 @@ s32 hwmsgbox_send_message(struct message *pmessage, u32 timeout)
 	    (pmessage->count && !pmessage->paras))
 		return -EINVAL;
 	response_capacity = pmessage->count;
+	frame_words = MESSAGE_FRAME_HEADER_WORDS + pmessage->count;
+
+	/*
+	 * A frame which fits in one FIFO must have all of its slots available
+	 * before the header is written.  This keeps a timeout from exposing a
+	 * partial frame to the peer; this API has a single process-context sender.
+	 */
+	if (frame_words <= HWMSGBOX_FIFO_DEPTH) {
+		u32 queue = (pmessage->attr & MESSAGE_ATTR_HARDSYN) ?
+			HWMSGBOX_RISC_SYN_TX_CH : HWMSGBOX_RISC_ASYN_TX_CH;
+
+		ret = hwmsgbox_wait_queue_space(queue, frame_words, timeout);
+		if (ret != OK)
+			return ret;
+	}
 
 	if (pmessage->attr & MESSAGE_ATTR_HARDSYN) {
 		/* use ar100 hwsyn transmit channel */
@@ -324,15 +357,21 @@ s32 hwmsgbox_query_message(struct message *pmessage, u32 para_capacity,
 	    (para_capacity && !pmessage->paras))
 		return -EINVAL;
 
-	/* query ar100 asyn received channel */
-	if (!!readl(MSGBOX_ARM_TO_RISC_MSG_STATUS_REG(HWMSGBOX_RISC_ASYN_RX_CH))) {
+	/*
+	 * Do not consume a lone header word. CPUX may write a frame through
+	 * separate MMIO operations, so parsing must not start until both fixed
+	 * header words are visible in the FIFO.
+	 */
+	if (readl(MSGBOX_ARM_TO_RISC_MSG_STATUS_REG(HWMSGBOX_RISC_ASYN_RX_CH)) >=
+	    MESSAGE_FRAME_HEADER_WORDS) {
 		LOG("query asyn msg\n");
 		return hwmsgbox_receive_message(HWMSGBOX_RISC_ASYN_RX_CH,
 						pmessage, para_capacity, timeout);
 	}
 
 	/* query ar100 syn received channel */
-	if (!!readl(MSGBOX_ARM_TO_RISC_MSG_STATUS_REG(HWMSGBOX_ARM_SYN_TX_CH))) {
+	if (readl(MSGBOX_ARM_TO_RISC_MSG_STATUS_REG(HWMSGBOX_ARM_SYN_TX_CH)) >=
+	    MESSAGE_FRAME_HEADER_WORDS) {
 		LOG("query syn msg\n");
 		return hwmsgbox_receive_message(HWMSGBOX_ARM_SYN_TX_CH,
 						pmessage, para_capacity, timeout);

@@ -30,6 +30,9 @@
 #define STARTUP_NOTIFY_TIMEOUT          (3000)	/* startup notify is best-effort during bring-up */
 #define HWMSGBOX_QUERY_TIMEOUT          (100)	/* per-word receive timeout, base on ms */
 #define MESSAGE_PARA_MAX                (32)
+#define HWMSGBOX_FIFO_DEPTH             (8)
+#define MESSAGE_FRAME_HEADER_WORDS      (2)
+#define STARTUP_NOTIFY_PARA_WORDS       (6)
 
 typedef struct message {
 	unsigned char state;	/* identify the used status of message frame */

@@ -35,9 +35,12 @@ struct int_isr_node isr_table[IRQ_SOUCE_MAX];
 s32 interrupt_init(void)
 {
 	s32 index;
+	s32 ret;
 
 	/*initialize interrupt controller */
-	intc_init();
+	ret = intc_init();
+	if (ret != OK)
+		return ret;
 
 	/*initialize ISR table */
 	for (index = 0; index < IRQ_SOUCE_MAX; index++) {
@@ -224,4 +227,3 @@ s32 interrupt_get_enabled(u32 intno)
 {
 	return intc_interrupt_is_enabled(intno);
 }
-

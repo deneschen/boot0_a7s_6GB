@@ -27,6 +27,10 @@ u32 dtb_base;
 /* the list of daemon notifier */
 static struct notifier *daemon_list;
 
+_Static_assert(MESSAGE_FRAME_HEADER_WORDS + STARTUP_NOTIFY_PARA_WORDS <=
+	       HWMSGBOX_FIFO_DEPTH,
+	       "startup notification must fit in one message-box FIFO");
+
 int daemon_register_service(__pNotifier_t pcb)
 {
 	return notifier_insert(&daemon_list, pcb);
@@ -34,8 +38,9 @@ int daemon_register_service(__pNotifier_t pcb)
 
 static s32 startup_state_notify(s32 result)
 {
-	struct message message;
-	u32 arisc_version[13] = {0};
+	struct message message = {0};
+	u32 arisc_version[STARTUP_NOTIFY_PARA_WORDS] = {0};
+	u32 version_len;
 	s32 ret;
 
 	LOG("feedback startup result [%d]\n", result);
@@ -50,15 +55,12 @@ static s32 startup_state_notify(s32 result)
 	message.paras = arisc_version;
 
 	/* must end with '\0' */
-	strncpy((char *)(arisc_version), SUB_VER, sizeof(arisc_version) - 1);
+	version_len = strlen(SUB_VER);
+	if (version_len >= sizeof(arisc_version))
+		version_len = sizeof(arisc_version) - 1;
+	memcpy(arisc_version, SUB_VER, version_len);
 
-	/*
-	 * Best-effort: with no ARM-side consumer the 8-word FIFO cannot hold
-	 * this 15-word frame, so the send may leave a partial frame behind.
-	 * The message loop drops the late reply, and a future consumer is
-	 * expected to flush its receive FIFO before use (as the sunxi-msgbox
-	 * driver does), so a stale frame is discarded rather than misparsed.
-	 */
+	/* Header plus payload is one complete 8-word hardware FIFO frame. */
 	ret = hwmsgbox_send_message(&message, STARTUP_NOTIFY_TIMEOUT);
 
 	if (ret == OK)
@@ -68,7 +70,7 @@ static s32 startup_state_notify(s32 result)
 
 	save_state_flag(REC_HOTPULG | 0xe);
 
-	return OK;
+	return ret;
 }
 
 /*
@@ -95,6 +97,9 @@ static void message_process_loop(void)
 
 static void daemon_main(void)
 {
+	u32 next_daemon_tick = DAEMON_ONCE_TICKS;
+	u32 tick;
+
 	/* initialize cpu */
 	cpu_init();
 
@@ -105,7 +110,9 @@ static void daemon_main(void)
 		message_process_loop();
 
 		/* daemon list process */
-		if (((current_time_tick()) % DAEMON_ONCE_TICKS) == 0) {
+		tick = current_time_tick();
+		if ((s32)(tick - next_daemon_tick) >= 0) {
+			next_daemon_tick = tick + DAEMON_ONCE_TICKS;
 			/* daemon run one time */
 			printk("------------------------------\n");
 			LOG("system tick:%d\n", DAEMON_ONCE_TICKS);
@@ -165,6 +172,10 @@ static s32 dtb_base_init(void)
 void startup_entry(void)
 {
 	s32 dtb_status;
+	s32 intc_status;
+	s32 ret;
+	s32 startup_status = OK;
+	bool msgbox_ready = FALSE;
 
 	/* CPUCFG owns the little-endian window used to read HW_CONFIG. */
 	cpucfg_init();
@@ -183,15 +194,25 @@ void startup_entry(void)
 
 	save_state_flag(REC_HOTPULG | 0x3);
 
-	interrupt_init();
+	intc_status = interrupt_init();
+	if (intc_status != OK) {
+		ERR("interrupt controller init failed: %d\n", intc_status);
+		return;
+	}
+	cpu_enable_global_int();
 	save_state_flag(REC_HOTPULG | 0x4);
 
 	arisc_para_init();
 	save_state_flag(REC_HOTPULG | 0x5);
 
-	debugger_init();
+	ret = debugger_init();
+	if (ret != OK) {
+		startup_status = ret;
+		WRN("debugger unavailable: %d\n", ret);
+	}
 	save_state_flag(REC_HOTPULG | 0x6);
-	LOG("debugger system ok\n");
+	if (ret == OK)
+		LOG("debugger system ok\n");
 
 	/* DTB is optional; dependent power operations remain disabled without it. */
 	if (dtb_status != OK)
@@ -199,41 +220,70 @@ void startup_entry(void)
 	else if (platform_dts_parse_late() != OK)
 		WRN("DRAM parameters unavailable; DFS and standby disabled\n");
 
-	twi_init();
+	ret = twi_init();
+	if (ret != OK)
+		goto startup_failed;
 	LOG("twi driver ok\n");
 	save_state_flag(REC_HOTPULG | 0x7);
 
-	pmu_init();
-	bmu_init();
+	ret = pmu_init();
+	if (ret != OK)
+		goto startup_failed;
+	ret = bmu_init();
+	if (ret != OK)
+		WRN("BMU unavailable: %d\n", ret);
+	else
+		LOG("bmu driver ok\n");
 	save_state_flag(REC_HOTPULG | 0x8);
-	LOG("pmu & bmu driver ok\n");
+	LOG("pmu driver ok\n");
 
-	hwmsgbox_init();
-	amp_msgbox_init();
+	ret = hwmsgbox_init();
+	if (ret != OK)
+		goto startup_failed;
+	msgbox_ready = TRUE;
+	ret = amp_msgbox_init();
+	if (ret != OK)
+		WRN("AMP mailbox unavailable: %d\n", ret);
 	save_state_flag(REC_HOTPULG | 0x9);
 	LOG("hwmsgbox driver ok\n");
 
 	save_state_flag(REC_HOTPULG | 0xa);
 	LOG("cpucfg driver ok\n");
 
-	message_manager_init();
+	ret = message_manager_init();
+	if (ret != OK)
+		goto startup_failed;
 	LOG("message manager ok\n");
 
-	timer_init();
+	ret = timer_init();
+	if (ret != OK)
+		goto startup_failed;
 	LOG("timer driver ok\n");
 
-	standby_init();
+	ret = standby_init();
+	if (ret != OK)
+		goto startup_failed;
 	LOG("standby service ok\n");
 
-	time_ticks_init();
+	ret = time_ticks_init();
+	if (ret != OK)
+		goto startup_failed;
 	LOG("time ticks ok\n");
 
-	watchdog_init();
+	ret = watchdog_init();
+	if (ret != OK) {
+		WRN("watchdog unavailable: %d\n", ret);
+		if (startup_status == OK)
+			startup_status = ret;
+	}
 	save_state_flag(REC_HOTPULG | 0xc);
-	LOG("watchdog ok\n");
+	if (ret == OK)
+		LOG("watchdog configured (not enabled)\n");
 
 	/* feedback the startup state to ac327 */
-	startup_state_notify(OK);
+	ret = startup_state_notify(startup_status);
+	if (ret != OK)
+		WRN("startup notification failed: %d\n", ret);
 
 	set_paras();
 	save_state_flag(REC_HOTPULG | 0xf);
@@ -248,4 +298,12 @@ void startup_entry(void)
 	ERR("system daemon exit\n");
 	while (1)
 		;
+
+startup_failed:
+	ERR("mandatory startup stage failed: %d\n", ret);
+	save_state_flag(REC_HOTPULG | 0xb00 | ((u32)(-ret) & 0xff));
+	if (msgbox_ready)
+		startup_state_notify(ret);
+	while (1)
+		cpu_enter_doze();
 }

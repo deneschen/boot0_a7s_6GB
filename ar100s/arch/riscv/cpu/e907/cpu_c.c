@@ -47,6 +47,11 @@ void cpu_enable_int(s32 cpsr)
 	c906_irq_restore(cpsr);
 }
 
+void cpu_enable_global_int(void)
+{
+	__asm volatile("csrsi mstatus, 8" : : : "memory");
+}
+
 /*return value by making a syscall*/
 void exit(s32 i)
 {
