@@ -18,10 +18,11 @@
    ```text
    BROM
      -> boot0 (AArch32，SRAM，初始化电源/DRAM/启动介质)
-     -> TF-A FIP（主 LBA 32800，备 LBA 24576）
-          |- SCP_BL2 / AR100S 固件 (RV32 RISC-V)
-          |- BL31 monitor header + AArch64 EL3 runtime
-          `- BL33 / U-Boot proper (AArch32)
+	     -> TF-A FIP（主 LBA 32800，备 LBA 24576）
+	          |- SCP_BL2 / AR100S 固件 (RV32 RISC-V)
+	          |- BL31 monitor header + AArch64 EL3 runtime
+	          |- BL33 / U-Boot proper (AArch32)
+	          `- HW_CONFIG / AR100S DTB
      -> DRAM handoff stub（启动 SCP，RMR 切换至 BL31）
      -> U-Boot 重定位和板级初始化
      -> distro_bootcmd / extlinux
@@ -32,7 +33,8 @@
 
 2. boot0 和 U-Boot 都不是 AArch64：当前 `boot0.elf` 与 `src/u-boot` 均为 ELF32 ARM。AArch64 转换由 BL31 完成，Linux 才以 AArch64 运行。
 
-3. DRAM 只在 boot0 阶段真正初始化。U-Boot 的 `dram_init()` 读取 boot0 写入 U-Boot 头部的容量，不重新训练 DRAM。
+3. DRAM 只在 boot0 阶段真正初始化。当前主线 BL33 没有厂商 spare header，boot0
+   不再改写 U-Boot 镜像；U-Boot 通过地址探测得到低 2GiB 可用视图，不重新训练 DRAM。
 
 4. 实机已经证明 A7S 完成 UART0、AXP8191、LPDDR5 四 Pstate 训练、6GB 容量识别、SD0 初始化、FIP 加载、BL31 初始化以及跳转至 U-Boot `=>` 提示符。U-Boot 的 `mmc info` 也已识别 58.9GiB、4-bit、50MHz SD 卡。
 
@@ -40,7 +42,9 @@
 
 6. BL31 的卡死根因是 GIC-600 Redistributor 初始断电，清除 `GICR_WAKER.ProcessorSleep` 后 `ChildrenAsleep` 不会退出。启用 `GICV3_SUPPORT_GIC600 := 1` 后，TF-A 在访问 `WAKER` 前通过 `GICR_PWRR` 完成 Redistributor 上电，实机得以进入 U-Boot。
 
-7. 当前尚未由本轮实机日志验证 Linux 引导、带 `HW_CONFIG` 的 FIP、AR100S DDR DFS 和深度待机。`BL31: No DTB found.` 在当前无 `HW_CONFIG` FIP 模式不是启动失败，但会限制这些运行期功能。
+7. 当前构建已经默认打包专用 `HW_CONFIG`，但尚未由实机日志验证该新 FIP、Linux
+   引导、AR100S DDR DFS 和深度待机。无 `HW_CONFIG` 仍可启动到 U-Boot，但 DFS/深待机
+   会被 AR100S 拒绝。
 
 ---
 
@@ -489,7 +493,11 @@ A733 U-Boot 的 `clock_init_uart()` 直接返回，`clock_set_corepll()` 也直�
 
 `board_init_f()` 的关键顺序来自 `src/common/board_f.c:832-979`：FDT、早期 malloc/log、CPU/SoC、DM、timer、环境、串口/console、DRAM 容量、内存保留和重定位布局。
 
-这里的 `dram_init()` 不训练 DRAM，只读取 `uboot_spare_head.boot_data.dram_scan_size`：`src/board/sunxi/board.c:278-309`。当前代码还把 U-Boot 自己的 `gd->ram_size` 上限限制为 2048MiB；6GB 物理容量仍可通过后续 DT/boot 参数描述给内核，但 U-Boot 自身的重定位/分配视图按这段代码最多使用 2GB。
+当前主线 `dram_init()` 不训练 DRAM，而是用 `get_ram_size()` 探测并受
+`CONFIG_SUNXI_DRAM_MAX_SIZE=0x80000000` 限制为低 2GiB。由于同时启用了
+`CONFIG_ARCH_FIXUP_FDT_MEMORY`，常规 bootm/bootz 路径会用该 2GiB 视图改写 DT
+`/memory`；所以当前不能宣称 Linux 可见完整 6GiB，仍需独立的 64-bit DRAM handoff
+和 A733 FDT fixup。
 
 ### 8.4 `board_init_r()` 与 Sunxi 板级初始化
 
@@ -576,8 +584,7 @@ PXE/extlinux 对无传统/FIT 头的 ARM64 `Image` 调用 `booti`：`src/cmd/pxe
 | BL31 monitor header | `0x48000000` | `bl31-monitor.bin` 私有头 |
 | BL31 AArch64 entry | `0x48001000` | monitor header 后 `0x1000` |
 | HW_CONFIG / SCP DTB 区 | `0x48100000` | FIP 可选 `HW_CONFIG` |
-| U-Boot image base | `0x4a000000` | defconfig 与 U-Boot 头 |
-| U-Boot `_start` | `0x4a000640` | `src/u-boot` ELF |
+| U-Boot image base / `_start` | `0x4a000000` | 当前主线 U-Boot ELF/defconfig |
 | U-Boot 内嵌/后备 DTB | `0x4a200000` | `src/arch/arm/mach-sunxi/board.c:170-177` |
 | kernel_addr_r | `0x40080000` | `src/include/configs/sunxi-common.h:47-55` |
 | fdt_addr_r | `0x4fa00000` | 同上 |
@@ -782,4 +789,7 @@ Bus Width: 4-bit
 
 BL31 的实机卡死根因已确认：A733 使用 GIC-600，Redistributor 在复位后处于断电状态。仅清除 `GICR_WAKER.ProcessorSleep` 会无限等待 `ChildrenAsleep`；启用 `GICV3_SUPPORT_GIC600` 后，TF-A 的 GIC-600 驱动先经 `GICR_PWRR` 完成上电，再执行通用 GICv3 初始化。该修改已经由进入 U-Boot 的实机日志验证。GIC 时钟配置保留以匹配厂商 U-Boot 早期设置，但单独设置时钟不足以解决该卡死。
 
-仍须保持两个边界：boot0 的 DRAM 与部分板级代码仍依赖预编译对象；本轮只验证到 U-Boot 和 SD 卡识别，尚未验证 Linux 引导、带 HW_CONFIG 的 FIP、AR100S DDR DFS 或深度待机。后续回归应至少覆盖冷启动、主/备 FIP 回退、带/不带 HW_CONFIG，以及 Linux 启动和待机恢复。
+仍须保持三个边界：boot0 的 DRAM 与部分板级代码仍依赖预编译对象；当前带
+HW_CONFIG 的新 FIP 只完成 host 构建/校验，尚未上板；TF-A 尚未把 Linux 的 DFS、
+wakeup、CRC 和 deep-standby SMC 接到 AR100S mailbox。后续回归应至少覆盖冷启动、
+主/备 FIP 回退、启动通知/loopback、Linux 启动、2GiB/6GiB DT 边界和待机恢复。

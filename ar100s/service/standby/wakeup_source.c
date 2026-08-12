@@ -66,7 +66,7 @@ static int group_irq_init(void *parg)
 
 	/* this is a group irq, we need to set group config, otherwise do nothing. */
 	if (group_irq_num != FAIL)
-		interrupt_set_group_config(group_irq_num, TRUE);
+		return interrupt_set_group_config(group_irq_num, TRUE);
 
 	return OK;
 }
@@ -80,37 +80,92 @@ static int group_irq_exit(void *parg)
 
 	/* this is a group irq, we need to set group config, otherwise do nothing. */
 	if (group_irq_num != FAIL)
-		interrupt_set_group_config(group_irq_num, FALSE);
+		return interrupt_set_group_config(group_irq_num, FALSE);
 
 	return OK;
 }
 
 static int irq_wakesource_init(s32 irq_num, __pCBK_t init, void *init_parg, __pISR_t handler, void *parg)
 {
-	if (init != NULL)
-		(*init)(init_parg);
+	s32 ret;
 
-	if (handler != NULL)
-		install_isr(irq_num, handler, parg);
+	/* Do not expose a stale CLIC pending bit while changing the route. */
+	ret = interrupt_set_mask(irq_num, TRUE);
+	if (ret != OK)
+		return ret;
+	interrput_arch_set_mask(irq_num, FALSE);
+	ret = interrupt_disable(irq_num);
+	if (ret != OK)
+		return ret;
+	ret = interrupt_clear_pending(irq_num);
+	if (ret != OK)
+		return ret;
 
-	interrupt_enable(irq_num);
-	interrupt_set_mask(irq_num, FALSE);
+	if (init != NULL) {
+		ret = (*init)(init_parg);
+		if (ret != OK)
+			return ret;
+	}
+
+	if (handler != NULL) {
+		ret = install_isr(irq_num, handler, parg);
+		if (ret != OK)
+			goto disable_group;
+	}
+
+	ret = interrupt_enable(irq_num);
+	if (ret != OK)
+		goto uninstall;
+	ret = interrupt_set_mask(irq_num, FALSE);
+	if (ret != OK)
+		goto uninstall;
 	interrput_arch_set_mask(irq_num, TRUE);
 
 	return OK;
+
+uninstall:
+	interrupt_disable(irq_num);
+	if (handler != NULL)
+		uninstall_isr(irq_num, handler);
+disable_group:
+	if (init == group_irq_init)
+		group_irq_exit(init_parg);
+	return ret;
 }
 
 static int irq_wakesource_exit(s32 irq_num, __pCBK_t exit, void *exit_parg, __pISR_t handler, void *parg)
 {
-	if (exit != NULL)
-		(*exit)(exit_parg);
+	s32 first_error = OK;
+	s32 ret;
 
-	if (handler != NULL)
-		install_isr(irq_num, handler, parg);
-	interrupt_set_mask(irq_num, TRUE);
+	(void)parg;
+
+	ret = interrupt_set_mask(irq_num, TRUE);
+	if (ret != OK)
+		first_error = ret;
 	interrput_arch_set_mask(irq_num, FALSE);
 
-	return OK;
+	ret = interrupt_disable(irq_num);
+	if (ret != OK && first_error == OK)
+		first_error = ret;
+
+	ret = interrupt_clear_pending(irq_num);
+	if (ret != OK && first_error == OK)
+		first_error = ret;
+
+	if (handler != NULL) {
+		ret = uninstall_isr(irq_num, handler);
+		if (ret != OK && first_error == OK)
+			first_error = ret;
+	}
+
+	if (exit != NULL) {
+		ret = (*exit)(exit_parg);
+		if (ret != OK && first_error == OK)
+			first_error = ret;
+	}
+
+	return first_error;
 }
 
 s32 set_wakeup_src(struct message *pmessage)
@@ -151,18 +206,19 @@ s32 set_wakeup_src(struct message *pmessage)
 			wakeup_source = NO_WAKESOURCE;
 		}
 
-		switch (irq_no) {
-		default:
-			{
-				para[0] = wakeup_root_irq;
-				para[1] = wakeup_secondary_irq;
-				para[2] = wakeup_thrid_irq;
-				irq_wakesource_init(irq_no, group_irq_init, &para[0],
-						default_wakeup_handler, NULL);
-				break;
+			switch (irq_no) {
+			default:
+				{
+					para[0] = wakeup_root_irq;
+					para[1] = wakeup_secondary_irq;
+					para[2] = wakeup_thrid_irq;
+					return irq_wakesource_init(irq_no, group_irq_init,
+							   &para[0],
+							   default_wakeup_handler,
+							   NULL);
+				}
 			}
 		}
-	}
 
 	return OK;
 }
@@ -174,9 +230,9 @@ s32 clear_wakeup_src(struct message *pmessage)
 	u32 wakeup_root_irq;
 	u32 wakeup_secondary_irq;
 	u32 wakeup_thrid_irq;
-	u32 time_to_wakeup;
 
 	s32 irq_no;
+	s32 ret;
 	u32 para[3];
 
 	wakeup_src_type = (pmessage->paras[0] >> 30) & 0x3;
@@ -185,8 +241,9 @@ s32 clear_wakeup_src(struct message *pmessage)
 	wakeup_thrid_irq = (pmessage->paras[0] >> 20) & 0x3FF;
 
 	if (wakeup_src_type == 0x3) {
-		time_to_wakeup = pmessage->paras[0] & 0x3fffffff;
-		wakeup_timer.cycle = msec_to_ticks(time_to_wakeup);
+		wakeup_timer_stop();
+		wakeup_timer.cycle = 0;
+		wakeup_timer.expires = 0;
 	} else {
 		irq_no = CPUX_IRQ_MAPTO_CPUS(wakeup_root_irq);
 		if (irq_no == -1) {
@@ -200,8 +257,10 @@ s32 clear_wakeup_src(struct message *pmessage)
 				para[0] = wakeup_root_irq;
 				para[1] = wakeup_secondary_irq;
 				para[2] = wakeup_thrid_irq;
-				irq_wakesource_exit(irq_no, group_irq_exit, &para[0],
-						NULL, NULL);
+				ret = irq_wakesource_exit(irq_no, group_irq_exit, &para[0],
+						default_wakeup_handler, NULL);
+				if (ret != OK)
+					return ret;
 				break;
 			}
 		}
@@ -209,4 +268,3 @@ s32 clear_wakeup_src(struct message *pmessage)
 
 	return OK;
 }
-

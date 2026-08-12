@@ -60,11 +60,7 @@ static uint64_t rtc_last_time;
 /* backup PLL */
 typedef struct PLL_PAMA {
 	u32 addr;
-	u8  pll_en;
-	u8  pll_ldo_en;
-	u8  lock_en;
-	u8  out_put_en;
-	u32 factor;
+	u32 value;
 } rPLL_PAMA;
 rPLL_PAMA pll_restore[14];
 
@@ -77,8 +73,11 @@ typedef struct BUS_PAMA {
 } rBUS_PAMA;
 rBUS_PAMA bus_restore[7];
 
-/* nsi/mbus/trace/gic addr */
-static uint32_t bus_ctl_restore[4];
+/* nsi/mbus/trace/gic registers */
+static uint32_t bus_ctl_addr[4];
+static uint32_t bus_ctl_value[4];
+
+#define STANDBY_HW_POLL_LIMIT	100000U
 
 
 enum bus_clock_mode {
@@ -208,10 +207,10 @@ static void suspend_para_prepare(void)
 	bus_restore[5].busAddr = APBS0_CFG_REG;
 	bus_restore[6].busAddr = APBS1_CFG_REG;
 
-	bus_ctl_restore[0] = CCU_NSI_CFG_REG;
-	bus_ctl_restore[1] = CCU_MBUS_CLK_REG;
-	bus_ctl_restore[2] = CCU_GIC_CFG_REG;
-	bus_ctl_restore[3] = CCU_TRACE_CFG_REG;
+	bus_ctl_addr[0] = CCU_NSI_CFG_REG;
+	bus_ctl_addr[1] = CCU_MBUS_CLK_REG;
+	bus_ctl_addr[2] = CCU_GIC_CFG_REG;
+	bus_ctl_addr[3] = CCU_TRACE_CFG_REG;
 	/* apbs1 need separate recovery */
 	//pmu_ext_power_max = pmu_ext_is_exist();
 	para_has_parsed = 1;
@@ -262,7 +261,7 @@ static s32 standby_dts_parse(void)
 	fdt = (void *)(dtb_base);
 
 	/* parse power tree */
-	param_node = fdt_path_offset(fdt, "standby_param");
+	param_node = fdt_path_offset(fdt, "/standby_param");
 	if (param_node < 0) {
 		WRN("no standby_param: %x fdt:%x\n", param_node, fdt);
 		return -1;
@@ -314,10 +313,13 @@ static void wait_wakeup(void)
 	wakeup_timer_stop();
 }
 
-static void wait_cpu0_resume(void)
+#define CPU0_RESTORE_QUERY_RETRIES 50U
+
+static s32 wait_cpu0_resume(void)
 {
 	s32 ret;
-	struct message message;
+	struct message message = {0};
+	u32 retries;
 
 	/* no paras for resume notify message */
 	message.paras = NULL;
@@ -325,7 +327,7 @@ static void wait_cpu0_resume(void)
 	printk("wait ac327 resume...\n");
 
 	/* wait cpu0 restore finished. */
-	while (1) {
+	for (retries = 0; retries < CPU0_RESTORE_QUERY_RETRIES; retries++) {
 		ret = hwmsgbox_query_message(&message, 0, HWMSGBOX_QUERY_TIMEOUT);
 		if (ret != OK)
 			continue; /* no message, query again */
@@ -339,99 +341,134 @@ static void wait_cpu0_resume(void)
 			message.result = 0;
 			message.paras = (u32 *)&wakeup_source;
 			/* synchronous message, need feedback. */
-			hwmsgbox_feedback_message(&message, SEND_MSG_TIMEOUT);
-			break;
+			ret = hwmsgbox_feedback_message(&message, SEND_MSG_TIMEOUT);
+			wakeup_source = NO_WAKESOURCE;
+			return ret;
 		} else {
 			/* invalid message detected, ignore it, by sunny at 2012-6-28 11:33:13. */
 			ERR("standby ignore message [%x]\n", message.type);
 		}
 	}
 
+	ERR("timeout waiting for cpu0 restore notification\n");
 	wakeup_source = NO_WAKESOURCE;
+	return -ETIMEOUT;
 }
 
 
 #define AXP_POWER_MAX 32
-static void dm_suspend(void)
+static u8 dm_off_order[AXP_POWER_MAX];
+static u32 dm_off_count;
+static u32 dm_off_mask;
+
+static s32 dm_restore_off_rails(void)
 {
+	u8 failed_order[AXP_POWER_MAX];
+	u32 failed_count = 0;
+	u32 i;
 	u32 type;
+	s32 first_error = OK;
+	s32 ret;
 
-	/* vcc-io powerdown */
-	for (type = 0; type < AXP_POWER_MAX; type++) {
-		if ((standby_vcc_io >> type) & 0x1)
-			pmu_set_voltage_state(type, POWER_VOL_OFF);
+	while (dm_off_count) {
+		type = dm_off_order[--dm_off_count];
+		ret = pmu_set_voltage_state(type, POWER_VOL_ON);
+		if (ret != OK) {
+			ERR("restore rail %d failed: %d\n", type, ret);
+			failed_order[failed_count++] = type;
+			if (first_error == OK)
+				first_error = ret;
+		} else
+			dm_off_mask &= ~(1U << type);
 	}
 
-	/* vcc-efuse powerdown */
-	for (type = 0; type < AXP_POWER_MAX; type++) {
-		if ((standby_vcc_efuse >> type) & 0x1)
-			pmu_set_voltage_state(type, POWER_VOL_OFF);
-	}
+	/* Preserve failed rails in shutdown order so a later retry stays LIFO. */
+	for (i = 0; i < failed_count; i++)
+		dm_off_order[i] = failed_order[failed_count - i - 1];
+	dm_off_count = failed_count;
 
-	/* vdd-cpub powerdown */
-	for (type = 0; type < AXP_POWER_MAX; type++) {
-		if ((standby_vdd_cpub >> type) & 0x1)
-			pmu_set_voltage_state(type, POWER_VOL_OFF);
-	}
-
-	/* vdd-cpul powerdown */
-	for (type = 0; type < AXP_POWER_MAX; type++) {
-		if ((standby_vdd_cpu >> type) & 0x1)
-			pmu_set_voltage_state(type, POWER_VOL_OFF);
-	}
-
-	/* vdd-sys powerdown */
-	for (type = 0; type < AXP_POWER_MAX; type++) {
-		if ((standby_vdd_sys >> type) & 0x1)
-			pmu_set_voltage_state(type, POWER_VOL_OFF);
-	}
-
-	/* vcc-pll powerdown */
-	for (type = 0; type < AXP_POWER_MAX; type++) {
-		if ((standby_vcc_pll >> type) & 0x1)
-			pmu_set_voltage_state(type, POWER_VOL_OFF);
-	}
+	return first_error;
 }
 
-static void dm_resume(void)
+static s32 dm_power_off_mask(u32 mask)
 {
 	u32 type;
+	s32 ret;
 
-	/* vcc-pll powerup */
 	for (type = 0; type < AXP_POWER_MAX; type++) {
-		if ((standby_vcc_pll >> type) & 0x1)
-			pmu_set_voltage_state(type, POWER_VOL_ON);
+		if (!((mask >> type) & 0x1) ||
+		    ((dm_off_mask >> type) & 0x1))
+			continue;
+
+		ret = pmu_set_voltage_state(type, POWER_VOL_OFF);
+		if (ret != OK) {
+			ERR("power off rail %d failed: %d\n", type, ret);
+			return ret;
+		}
+
+		dm_off_order[dm_off_count++] = type;
+		dm_off_mask |= 1U << type;
 	}
 
-	/* vdd-sys powerup */
-	for (type = 0; type < AXP_POWER_MAX; type++) {
-		if ((standby_vdd_sys >> type) & 0x1)
-			pmu_set_voltage_state(type, POWER_VOL_ON);
+	return OK;
+}
+
+static s32 dm_suspend(void)
+{
+	s32 ret;
+
+	if (dm_off_count) {
+		ret = dm_restore_off_rails();
+		if (ret != OK) {
+			ERR("unrestored rails block standby: %d\n", ret);
+			return ret;
+		}
 	}
 
-	/* vdd-cpul powerup */
-	for (type = 0; type < AXP_POWER_MAX; type++) {
-		if ((standby_vdd_cpu >> type) & 0x1)
-			pmu_set_voltage_state(type, POWER_VOL_ON);
-	}
+	dm_off_count = 0;
+	dm_off_mask = 0;
 
-	/* vdd-cpub powerup */
-	for (type = 0; type < AXP_POWER_MAX; type++) {
-		if ((standby_vdd_cpub >> type) & 0x1)
-			pmu_set_voltage_state(type, POWER_VOL_ON);
-	}
+	/* vcc-io powerdown */
+	ret = dm_power_off_mask(standby_vcc_io);
+	if (ret != OK)
+		goto rollback;
 
-	/* vcc-efuse powerup */
-	for (type = 0; type < AXP_POWER_MAX; type++) {
-		if ((standby_vcc_efuse >> type) & 0x1)
-			pmu_set_voltage_state(type, POWER_VOL_ON);
-	}
+	/* vcc-efuse powerdown */
+	ret = dm_power_off_mask(standby_vcc_efuse);
+	if (ret != OK)
+		goto rollback;
 
-	/* vdd-io powerup */
-	for (type = 0; type < AXP_POWER_MAX; type++) {
-		if ((standby_vcc_io >> type) & 0x1)
-			pmu_set_voltage_state(type, POWER_VOL_ON);
-	}
+	/* vdd-cpub powerdown */
+	ret = dm_power_off_mask(standby_vdd_cpub);
+	if (ret != OK)
+		goto rollback;
+
+	/* vdd-cpul powerdown */
+	ret = dm_power_off_mask(standby_vdd_cpu);
+	if (ret != OK)
+		goto rollback;
+
+	/* vdd-sys powerdown */
+	ret = dm_power_off_mask(standby_vdd_sys);
+	if (ret != OK)
+		goto rollback;
+
+	/* vcc-pll powerdown */
+	ret = dm_power_off_mask(standby_vcc_pll);
+	if (ret != OK)
+		goto rollback;
+
+	return OK;
+
+rollback:
+	if (dm_restore_off_rails() != OK)
+		ERR("standby rail rollback incomplete\n");
+	return ret;
+}
+
+static s32 dm_resume(void)
+{
+	return dm_restore_off_rails();
 }
 
 static void dram_suspend(void)
@@ -445,7 +482,7 @@ static void dram_suspend(void)
 	dram_power_save_process((void *)(&dts_dram_para[0]));
 }
 
-static void dram_resume(void)
+static s32 dram_resume(void)
 {
 	dram_power_up_process((void *)(&dts_dram_para[0]));
 
@@ -454,12 +491,13 @@ static void dram_resume(void)
 		after_crc = standby_dram_crc();
 		if (after_crc != before_crc) {
 			save_state_flag(REC_SSTANDBY | REC_DRAM_DBG | 0xf);
-			ERR("dram crc error...\n");
-			ERR("---->>>>LOOP<<<<----\n");
-			while (1)
-				;
+			ERR("dram CRC mismatch: before=%x after=%x\n",
+			    before_crc, after_crc);
+			return -EFAIL;
 		}
 	}
+
+	return OK;
 }
 
 static bool is_chip_secure(void)
@@ -520,13 +558,13 @@ static void smc_standby_init(void)
 	}
 }
 
-static void smc_standby_exit(void)
+static s32 smc_standby_exit(void)
 {
 	int read_idx, resume_idx;
 
 	if (!is_chip_secure()) {
 		LOG("SMC: non-secure chip\n");
-		return;
+		return OK;
 	}
 
 	/* 1. Enable smc control */
@@ -535,9 +573,8 @@ static void smc_standby_exit(void)
 #endif
 	/* Make sure SMC is NOT bypassed accidentally */
 	if (readl(SMC_ACTION_REG) & SMC_FUNCTION_BYPASS) {
-		printk("SMC is not enabled!\n");
-		while (1) {
-		}
+		ERR("SMC bypass remains enabled after resume\n");
+		return -EFAIL;
 	}
 
 	/* Disable SMC-BYPASS for all masters: all masters (cpu|gpu...) must access dram through SMC */
@@ -565,6 +602,7 @@ static void smc_standby_exit(void)
 			      SMC_REGION_ATTRIBUTE_REG(resume_idx));
 		resume_idx++;
 	}
+	return OK;
 }
 
 static u32 usb_standby_port_support(void)
@@ -800,61 +838,53 @@ static void device_suspend(void)
 	hwmsgbox_super_standby_init();
 }
 
-static void device_resume(void)
+static s32 device_resume(void)
 {
+	s32 ret;
+
 	hwmsgbox_super_standby_exit();
 	twi_standby_exit();
 	pmu_standby_exit();
-	smc_standby_exit();
+	ret = smc_standby_exit();
 	sunxi_timestamp_resume();
 	usb_standby_exit();
+	return ret;
 }
 
-static void all_pll_set(enum pll_state sta)
+static s32 all_pll_set(enum pll_state sta)
 {
-	u32 reg_val, i;
+	u32 reg_val, saved, timeout, i;
 
 	for (i = 0; i < (sizeof(pll_restore) / sizeof(pll_restore[0])); i++) {
 		if (sta == pll_disable) {
-			/* save PLLs SET */
-			reg_val = readl(pll_restore[i].addr);
-			pll_restore[i].factor = reg_val & PLL_FACKOR_MASK;
-
-			/* disable PLLs */
-			writel((readl(pll_restore[i].addr) & (~PLL_ENABLE_MASK)), pll_restore[i].addr);
-			writel((readl(pll_restore[i].addr) & (~PLL_LDO_ENABLE_MASK)), pll_restore[i].addr);
-			writel((readl(pll_restore[i].addr) & (~PLL_LOCK_ENABLE_MASK)), pll_restore[i].addr);
+			pll_restore[i].value = readl(pll_restore[i].addr);
+			reg_val = pll_restore[i].value & ~(PLL_ENABLE_MASK |
+				PLL_LDO_ENABLE_MASK | PLL_LOCK_ENABLE_MASK |
+				PLL_OUTPUT_ENABLE_MASK);
+			writel(reg_val, pll_restore[i].addr);
 		} else if (sta == pll_enable) {
-			reg_val = readl(pll_restore[i].addr);
-
-			/* set n m p */
-			reg_val &= ~PLL_FACKOR_MASK;
-			reg_val |= pll_restore[i].factor;
-			writel(reg_val, pll_restore[i].addr);
-
-			/* set pll_en & pll_ldo_en, disable out_put_en */
-			reg_val = readl(pll_restore[i].addr);
-			reg_val |= 1 << PLL_ENABLE_SHIFT;
-			reg_val |= 1 << PLL_LDO_ENABLE_SHIFT;
-			reg_val &= ~PLL_OUTPUT_ENABLE_MASK;
-			writel(reg_val, pll_restore[i].addr);
-
-			/* set lock_en */
-			reg_val = readl(pll_restore[i].addr);
-			reg_val |= 1 << PLL_LOCK_ENABLE_SHIFT;
-			writel(reg_val, pll_restore[i].addr);
-			while (!(readl(pll_restore[i].addr) & PLL_LOCK_STATUS_MASK))
-				;
+			saved = pll_restore[i].value & ~PLL_LOCK_STATUS_MASK;
+			if (!(saved & PLL_ENABLE_MASK) ||
+			    !(saved & PLL_LOCK_ENABLE_MASK)) {
+				writel(saved, pll_restore[i].addr);
+				continue;
+			}
+			writel(saved & ~PLL_OUTPUT_ENABLE_MASK, pll_restore[i].addr);
+			timeout = STANDBY_HW_POLL_LIMIT;
+			while (!(readl(pll_restore[i].addr) & PLL_LOCK_STATUS_MASK)) {
+				if (!--timeout)
+					return -ETIMEOUT;
+			}
 		}
 	}
 	if (sta == pll_enable) {
 		time_udelay(20);
 		for (i = 0; i < (sizeof(pll_restore) / sizeof(pll_restore[0])); i++) {
-			reg_val = readl(pll_restore[i].addr);
-			reg_val |= 1 << PLL_OUTPUT_ENABLE_SHIFT;
-			writel(reg_val, pll_restore[i].addr);
+			saved = pll_restore[i].value & ~PLL_LOCK_STATUS_MASK;
+			writel(saved, pll_restore[i].addr);
 		}
 	}
+	return OK;
 }
 
 static void bus_clock_set(enum bus_clock_mode mode, enum bus_clock_mode bus)
@@ -902,21 +932,17 @@ static void bus_clock_ctl(enum bus_clock_mode mode, enum bus_clock_mode control)
 		end_tick = tg_end_tick;
 	}
 	for (bus_tick = start_tick; bus_tick < end_tick; bus_tick++) {
-		reg_val = readl(bus_ctl_restore[bus_tick]);
+		reg_val = readl(bus_ctl_addr[bus_tick]);
 		if (mode == clock_bak) {
-			reg_val = readl(bus_ctl_restore[bus_tick]);
-			reg_val &= (~(1 << 31));
-			reg_val |= (1 << 31);
-			writel(reg_val, bus_ctl_restore[bus_tick]);
+			writel(bus_ctl_value[bus_tick], bus_ctl_addr[bus_tick]);
 		} else {
-			reg_val = readl(bus_ctl_restore[bus_tick]);
+			bus_ctl_value[bus_tick] = reg_val;
 			reg_val &= (~(0x7 << 24));
-			writel(reg_val, bus_ctl_restore[bus_tick]);
+			writel(reg_val, bus_ctl_addr[bus_tick]);
 			reg_val &= (~(0x1f << 0));
-			writel(reg_val, bus_ctl_restore[bus_tick]);
+			writel(reg_val, bus_ctl_addr[bus_tick]);
 			reg_val &= (~(1 << 31));
-			reg_val |= (0 << 31);
-			writel(reg_val, bus_ctl_restore[bus_tick]);
+			writel(reg_val, bus_ctl_addr[bus_tick]);
 		}
 	}
 }
@@ -967,9 +993,12 @@ static void clk_resume_early(void)
 	dcxo_enable();
 }
 
-static void clk_resume(void)
+static s32 clk_resume(void)
 {
-	all_pll_set(pll_enable);
+	s32 ret = all_pll_set(pll_enable);
+
+	if (ret != OK)
+		ERR("PLL restore timeout: %d\n", ret);
 	/*
 	 * set apbs1 clk to 24M
 	 * then change the baudrate of uart and twi...
@@ -986,6 +1015,7 @@ static void clk_resume(void)
 	bus_clock_ctl(clock_bak, gic_tra_clk);
 	bus_clock_ctl(clock_bak, bus_clk);
 	bus_clock_set(clock_bak, ccmu_clk);
+	return ret;
 }
 
 /*standby power off cpu*/
@@ -1041,8 +1071,9 @@ static int sunxi_get_soc_ver(void)
 
 #define PLL_CTRL1_REG_OFFSET	(0x144)
 /*standby power on cpu*/
-static void cpu_pll_on(void)
+static s32 cpu_pll_on(void)
 {
+	u32 saved, timeout;
 	int i;
 
 	LOG("cpu on \n");
@@ -1061,6 +1092,11 @@ static void cpu_pll_on(void)
 	/* start Linear Frequency Modulation LFM pll setting */
 	/* step1: set cpu pll on */
 	for (i = 0; i < 4; i++) {
+		saved = cpu_pll_restore_bak[i];
+		if (!(saved & CPU_PLL_EN) || !(saved & CPU_PLL_LOCK_EN)) {
+			writel(saved & ~CPU_PLL_LOCK_STATUS, CPU_PLL_REG(i));
+			continue;
+		}
 		/* set pll on */
 		writel((readl(CPU_PLL_REG(i)) | CPU_PLL_LDO_EN), CPU_PLL_REG(i));
 		writel((readl(CPU_PLL_REG(i)) | CPU_PLL_OUTPUT), CPU_PLL_REG(i));
@@ -1068,23 +1104,35 @@ static void cpu_pll_on(void)
 		writel((readl(CPU_PLL_REG(i)) | CPU_PLL_LOCK_EN), CPU_PLL_REG(i));
 		writel((readl(CPU_PLL_REG(i)) | CPU_PLL_UPDATE), CPU_PLL_REG(i));
 
-		while (!(readl(CPU_PLL_REG(i)) & CPU_PLL_LOCK_STATUS))
-			;
+		timeout = STANDBY_HW_POLL_LIMIT;
+		while (!(readl(CPU_PLL_REG(i)) & CPU_PLL_LOCK_STATUS)) {
+			if (!--timeout)
+				return -ETIMEOUT;
+		}
 	}
 
 	time_mdelay(20);
 
 	for (i = 0; i < 4; i++) {
+		if (!(cpu_pll_restore_bak[i] & CPU_PLL_EN) ||
+		    !(cpu_pll_restore_bak[i] & CPU_PLL_LOCK_EN))
+			continue;
 		writel((readl(CPU_PLL_REG(i)) & ~CPU_PLL_OUTPUT), CPU_PLL_REG(i));
 		writel((readl(CPU_PLL_REG(i)) & (~CPU_PLL_FACTOR_MASK)) | (cpu_pll_restore_bak[i] & CPU_PLL_FACTOR_MASK), CPU_PLL_REG(i));
 		writel((readl(CPU_PLL_REG(i)) & ~CPU_PLL_LOCK_EN), CPU_PLL_REG(i));
 		writel((readl(CPU_PLL_REG(i)) | CPU_PLL_LOCK_EN), CPU_PLL_REG(i));
 		writel((readl(CPU_PLL_REG(i)) | CPU_PLL_UPDATE), CPU_PLL_REG(i));
-		while ((readl(CPU_PLL_REG(i)) & CPU_PLL_UPDATE))
-			;
+		timeout = STANDBY_HW_POLL_LIMIT;
+		while ((readl(CPU_PLL_REG(i)) & CPU_PLL_UPDATE)) {
+			if (!--timeout)
+				return -ETIMEOUT;
+		}
 
-		while (!(readl(CPU_PLL_REG(i)) & CPU_PLL_LOCK_STATUS))
-			;
+		timeout = STANDBY_HW_POLL_LIMIT;
+		while (!(readl(CPU_PLL_REG(i)) & CPU_PLL_LOCK_STATUS)) {
+			if (!--timeout)
+				return -ETIMEOUT;
+		}
 
 		time_mdelay(20);
 		writel((readl(CPU_PLL_REG(i)) | CPU_PLL_OUTPUT), CPU_PLL_REG(i));
@@ -1099,6 +1147,7 @@ static void cpu_pll_on(void)
 
 	writel(((readl(DSU_CLK_REG) & (~DSU_FACTOR_MASK)) | (cpu_clk_restore_bak[2] & DSU_FACTOR_MASK)), DSU_CLK_REG);
 	writel(((readl(DSU_CLK_REG) & (~DSU_CLK_SRC_SEL_MASK)) | (cpu_clk_restore_bak[2] & DSU_CLK_SRC_SEL_MASK)), DSU_CLK_REG);
+	return OK;
 }
 
 #define CPU_DIRECT_ACCESS_DDR 0x8000200
@@ -1132,9 +1181,9 @@ static void nsi_resume(void)
 	writel(0x1, 0x202220c);
 }
 
-static void ppu_resume(void)
+static s32 ppu_resume(void)
 {
-	u32 reg_val, i;
+	u32 reg_val, timeout, i;
 
 	for (i = 0; i < 11; i++) {
 		reg_val = readl(PCK600_REG_BASE + 0x1000 * i);
@@ -1145,9 +1194,13 @@ static void ppu_resume(void)
 		if (i == 6)
 			continue;
 
-		while (!(readl(PCK600_REG_BASE + 0x1000 * i + 0x8) & 0x8))
-			;
+		timeout = STANDBY_HW_POLL_LIMIT;
+		while (!(readl(PCK600_REG_BASE + 0x1000 * i + 0x8) & 0x8)) {
+			if (!--timeout)
+				return -ETIMEOUT;
+		}
 	}
+	return OK;
 }
 
 static void system_suspend(void)
@@ -1227,6 +1280,8 @@ static u32 platform_standby_type(void)
 
 static s32 standby_process_init(struct message *pmessage)
 {
+	s32 ret;
+
 	suspend_lock = 1;
 
 	suspend_para_prepare();
@@ -1259,19 +1314,27 @@ static s32 standby_process_init(struct message *pmessage)
 	rtc_vccio_det_suspend();
 	save_state_flag(REC_ESTANDBY | REC_ENTER_INIT | 0xA);
 
-	dm_suspend();
+	ret = dm_suspend();
+	if (ret != OK)
+		return ret;
 	save_state_flag(REC_ESTANDBY | REC_ENTER_INIT | 0xB);
 
 	return OK;
 }
 
-static s32 standby_process_exit(struct message *pmessage)
+static s32 standby_process_exit(struct message *pmessage, bool wait_restore)
 {
 	u32 resume_entry = pmessage->paras[1];
+	s32 first_error = OK;
+	s32 ret;
 
 	save_state_flag(REC_ESTANDBY | REC_ENTER_EXIT | 0x1);
 
-	dm_resume();
+	ret = dm_resume();
+	if (ret != OK) {
+		ERR("standby rail resume failed: %d\n", ret);
+		first_error = ret;
+	}
 	save_state_flag(REC_ESTANDBY | REC_ENTER_EXIT | 0x2);
 
 	rtc_vccio_det_resume();
@@ -1283,35 +1346,51 @@ static s32 standby_process_exit(struct message *pmessage)
 	system_resume();
 	save_state_flag(REC_ESTANDBY | REC_ENTER_EXIT | 0x5);
 
-	ppu_resume();
+	ret = ppu_resume();
+	if (ret != OK && first_error == OK)
+		first_error = ret;
 
-	clk_resume();
+	ret = clk_resume();
+	if (ret != OK && first_error == OK)
+		first_error = ret;
 	save_state_flag(REC_ESTANDBY | REC_ENTER_EXIT | 0x6);
 
 	cpu_direct_access_resume();
 	save_state_flag(REC_ESTANDBY | REC_ENTER_EXIT | 0x7);
 
-	dram_resume();
+	ret = dram_resume();
+	if (ret != OK && first_error == OK)
+		first_error = ret;
 	save_state_flag(REC_ESTANDBY | REC_ENTER_EXIT | 0x8);
 
 	nsi_resume();
 	save_state_flag(REC_ESTANDBY | REC_ENTER_EXIT | 0x9);
 
-	cpu_pll_on();
+	ret = cpu_pll_on();
+	if (ret != OK && first_error == OK)
+		first_error = ret;
 	save_state_flag(REC_ESTANDBY | REC_ENTER_EXIT | 0xA);
 
-	device_resume();
+	ret = device_resume();
+	if (ret != OK && first_error == OK)
+		first_error = ret;
 	save_state_flag(REC_ESTANDBY | REC_ENTER_EXIT | 0xB);
 
 	cpucfg_cpu_resume(resume_entry);
 	save_state_flag(REC_ESTANDBY | REC_ENTER_EXIT | 0xC);
 
-	wait_cpu0_resume();
+	if (wait_restore) {
+		ret = wait_cpu0_resume();
+		if (ret != OK && first_error == OK)
+			first_error = ret;
+	} else {
+		wakeup_source = NO_WAKESOURCE;
+	}
 	save_state_flag(REC_ESTANDBY | REC_ENTER_EXIT | 0xD);
 
 	suspend_lock = 0;
 
-	return OK;
+	return first_error;
 }
 
 /*
@@ -1327,6 +1406,8 @@ static s32 standby_process_exit(struct message *pmessage)
 */
 static s32 standby_entry(struct message *pmessage)
 {
+	s32 suspend_result;
+
 	save_state_flag(REC_ESTANDBY | REC_ENTER);
 
 	if (!platform_dram_para || standby_dts_parse() != OK) {
@@ -1341,6 +1422,8 @@ static s32 standby_entry(struct message *pmessage)
 
 	/* parse standby type from enabled interrupt */
 	standby_type = platform_standby_type();
+	/* Discard only the completed transaction's reason, before suspend starts. */
+	wakeup_source = NO_WAKESOURCE;
 
 	/*
 	 * --------------------------------------------------------------------------
@@ -1352,8 +1435,16 @@ static s32 standby_entry(struct message *pmessage)
 	save_state_flag(REC_ESTANDBY | REC_BEFORE_INIT);
 	result = standby_process_init(pmessage);
 	save_state_flag(REC_ESTANDBY | REC_AFTER_INIT);
-	if (result != OK)
-		return result;
+	if (result != OK) {
+		suspend_result = result;
+		ERR("standby suspend failed: %d; restoring system\n", result);
+		save_state_flag(REC_ESTANDBY | REC_BEFORE_EXIT);
+		result = standby_process_exit(pmessage, FALSE);
+		save_state_flag(REC_ESTANDBY | REC_AFTER_EXIT);
+		if (result != OK)
+			ERR("standby recovery failed: %d\n", result);
+		return suspend_result;
+	}
 
 	/*
 	 * --------------------------------------------------------------------------
@@ -1375,7 +1466,7 @@ static s32 standby_entry(struct message *pmessage)
 	 * --------------------------------------------------------------------------
 	 */
 	save_state_flag(REC_ESTANDBY | REC_BEFORE_EXIT);
-	result = standby_process_exit(pmessage);
+	result = standby_process_exit(pmessage, TRUE);
 	save_state_flag(REC_ESTANDBY | REC_AFTER_EXIT);
 
 	return result;
@@ -1410,22 +1501,25 @@ int cpu_op(struct message *pmessage)
 	if (entrypoint && system_state == arisc_power_off)
 		return standby_entry(pmessage);
 
-	return OK;
+	WRN("unsupported cpu operation: cpu=%x cluster=%x system=%x\n",
+	    cpu_state, cluster_state, system_state);
+	return -EFAIL;
 }
 
-static void system_shutdown(void)
+static s32 system_shutdown(void)
 {
-	pmu_shutdown();
+	return pmu_shutdown();
 }
 
-static void system_reset(void)
+static s32 system_reset(void)
 {
-	pmu_reset();
+	return pmu_reset();
 }
 
 int sys_op(struct message *pmessage)
 {
 	u32 state = pmessage->paras[0];
+	s32 ret;
 
 	LOG("state:%x\n", state);
 
@@ -1433,22 +1527,21 @@ int sys_op(struct message *pmessage)
 	case arisc_system_shutdown:
 		{
 			save_state_flag(REC_SHUTDOWN | 0x101);
-			pmu_charging_reset();
-			system_shutdown();
-			break;
+			ret = pmu_charging_reset();
+			if (ret != OK)
+				return ret;
+			return system_shutdown();
 		}
 	case arisc_system_reset:
 	case arisc_system_reboot:
 		{
 			save_state_flag(REC_SHUTDOWN | 0x102);
-			system_reset();
-			break;
+			return system_reset();
 		}
 	case arisc_uboot_shutdown:
 		{
 			save_state_flag(REC_SHUTDOWN | 0x103);
-			system_shutdown();
-			break;
+			return system_shutdown();
 		}
 	default:
 		{
@@ -1462,11 +1555,13 @@ int sys_op(struct message *pmessage)
 
 s32 fake_poweroff(struct message *pmessage)
 {
-	return 0;
+	WRN("fake poweroff is not supported\n");
+	return -EFAIL;
 }
 
 /* feedback pmu irq */
 s32 get_pmu_irq(struct message *pmessage)
 {
-	return OK;
+	WRN("PMU IRQ feedback is not supported\n");
+	return -EFAIL;
 }

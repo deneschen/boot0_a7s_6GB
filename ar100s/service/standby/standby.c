@@ -39,9 +39,7 @@ s32 standby_init(void)
 	before_crc = 0;
 	after_crc = 0;
 
-	wakeup_timer_init();
-
-	return OK;
+	return wakeup_timer_init();
 }
 
 /*
@@ -66,4 +64,3 @@ int long_jump(int (*fn)(void *arg), void *arg)
 
 	return (*fn)(arg);
 }
-
