@@ -34,6 +34,8 @@
 #   --uboot-dir DIR  mainline U-Boot tree (default: ../u-boot)
 #   --uboot-cross P  U-Boot toolchain prefix (default: arm-none-eabi-)
 #   --uboot FILE     use an external prebuilt BL33 instead of building U-Boot
+#   --hw-config FILE use an external AR100S HW_CONFIG DTB
+#   --no-hw-config   omit HW_CONFIG (DFS/deep standby remain disabled)
 #   --jobs N         parallel make jobs (default: nproc)
 #   -h, --help       show this help
 # =============================================================================
@@ -52,6 +54,7 @@ UBOOT_DTB="${UBOOT_BUILD}/u-boot.dtb"
 BL31_PLAT="sun60i_a733"
 BL31_LOAD_ADDR="0x48000000"
 BL33_MAX_SIZE=$((0x180000))
+HW_CONFIG="${BUILD}/a7s-ar100s-hw-config.dtb"
 
 JOBS="$(nproc 2>/dev/null || echo 4)"
 
@@ -60,6 +63,8 @@ SKIP_SCP=0
 SKIP_BL31=0
 SKIP_UBOOT=0
 EXTERNAL_UBOOT=0
+EXTERNAL_HW_CONFIG=0
+USE_HW_CONFIG=1
 
 usage() {
 	sed -n '3,/^# ===/p' "$0" | sed '$d; s/^# \{0,1\}//'
@@ -84,6 +89,10 @@ while [ $# -gt 0 ]; do
 	--uboot)
 		[ $# -ge 2 ] || { echo "error: --uboot needs a file" >&2; exit 1; }
 		UBOOT_BIN="$2"; EXTERNAL_UBOOT=1; shift ;;
+	--hw-config)
+		[ $# -ge 2 ] || { echo "error: --hw-config needs a file" >&2; exit 1; }
+		HW_CONFIG="$2"; EXTERNAL_HW_CONFIG=1; USE_HW_CONFIG=1; shift ;;
+	--no-hw-config) USE_HW_CONFIG=0 ;;
 	--jobs)
 		[ $# -ge 2 ] || { echo "error: --jobs needs a number" >&2; exit 1; }
 		JOBS="$2"; shift ;;
@@ -178,13 +187,27 @@ if [ "${UBOOT_SIZE}" -gt "${BL33_MAX_SIZE}" ]; then
 	exit 1
 fi
 
+# ---- AR100S HW_CONFIG -------------------------------------------------------
+if [ "${USE_HW_CONFIG}" -eq 1 ]; then
+	if [ "${EXTERNAL_HW_CONFIG}" -eq 0 ]; then
+		echo "==> building A7S AR100S HW_CONFIG"
+		make -C "${TOP}" hw-config
+	fi
+	require_file "${HW_CONFIG}"
+	make -C "${TOP}" "${BUILD}/test_hw_config_a733"
+	"${BUILD}/test_hw_config_a733" "${HW_CONFIG}"
+fi
+
 # ---- 6. FIP -----------------------------------------------------------------
 echo "==> packaging FIP"
-"${FIPTOOL}" create --align 512 \
-	--scp-fw "${BUILD}/scp.bin" \
-	--soc-fw "${BL31_MONITOR}" \
-	--nt-fw "${UBOOT_BIN}" \
-	"${FIP_OUTPUT}"
+FIP_ARGS=(create --align 512
+	--scp-fw "${BUILD}/scp.bin"
+	--soc-fw "${BL31_MONITOR}"
+	--nt-fw "${UBOOT_BIN}")
+if [ "${USE_HW_CONFIG}" -eq 1 ]; then
+	FIP_ARGS+=(--hw-config "${HW_CONFIG}")
+fi
+"${FIPTOOL}" "${FIP_ARGS[@]}" "${FIP_OUTPUT}"
 echo "==> FIP contents:"
 "${FIPTOOL}" info "${FIP_OUTPUT}"
 make -C "${TOP}" test
@@ -194,4 +217,7 @@ echo
 echo "=== build done ==="
 ls -l "${BUILD}/boot0_sdcard_sun60iw2p1.bin" "${BUILD}/scp.bin" \
 	"${BL31_MONITOR}" "${UBOOT_BIN}" "${FIP_OUTPUT}"
+if [ "${USE_HW_CONFIG}" -eq 1 ]; then
+	ls -l "${HW_CONFIG}"
+fi
 echo "=== flash with: sudo ../Share/flash.sh /dev/sdX ==="

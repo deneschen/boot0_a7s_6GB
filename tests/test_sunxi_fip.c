@@ -4,10 +4,30 @@
 
 #include <sunxi_fip.h>
 
-#define FIP_SIZE 512U
+#define FIP_SIZE 5120U
 #define FIP_HEADER_SIZE 16U
 #define FIP_ENTRY_SIZE 40U
 #define TEST_FDT_SIZE 64U
+#define TEST_SCP_OFFSET 256U
+#define TEST_SCP_SIZE 64U
+#define TEST_BL31_OFFSET 512U
+#define TEST_BL31_SIZE 0x1004U
+#define TEST_BL33_OFFSET 4624U
+#define TEST_BL33_SIZE 64U
+#define TEST_FDT_OFFSET 4736U
+#define TEST_UNKNOWN_OFFSET 4864U
+#define TEST_BACKUP_SECTOR 16U
+#define TEST_DISK_SIZE (TEST_BACKUP_SECTOR * 512U + FIP_SIZE)
+#define TEST_STAGED_DISK_SIZE (4U * 512U + FIP_SIZE)
+
+#define SCP_ENTRY_INSTRUCTION 0x30047073U
+#define SCP_TRACE_ADDR_HI 0x070902b7U
+#define SCP_TRACE_ADDR_LO 0x11c28293U
+#define SCP_TRACE_VALUE_HI 0xe9020337U
+#define SCP_TRACE_STORE 0xa0230305U
+#define SCP_ENTRY_PROLOGUE 0x40810062U
+#define BL31_MONITOR_BRANCH 0xea0003feU
+#define BL31_TEST_CODE_ENTRY 0xaa0003f4U
 
 struct copy_call {
 	unsigned int destination;
@@ -102,18 +122,54 @@ static void put_entry(unsigned char *entry, const unsigned char uuid[16],
 	put_le64(entry + 24, size);
 }
 
+static void put_valid_scp(unsigned char *image, size_t size)
+{
+	if (size < TEST_SCP_SIZE)
+		return;
+	put_le32(image, SCP_ENTRY_INSTRUCTION);
+	put_le32(image + 4, SCP_TRACE_ADDR_HI);
+	put_le32(image + 8, SCP_TRACE_ADDR_LO);
+	put_le32(image + 12, SCP_TRACE_VALUE_HI);
+	put_le32(image + 16, SCP_TRACE_STORE);
+	put_le32(image + 20, SCP_ENTRY_PROLOGUE);
+}
+
+static void put_valid_bl31(unsigned char *image, size_t size)
+{
+	if (size < TEST_BL31_SIZE)
+		return;
+	put_le32(image, BL31_MONITOR_BRANCH);
+	memcpy(image + 4, "monitor\0", 8);
+	put_le32(image + 0x2c, SUNXI_FIP_BL31_BASE);
+	put_le32(image + 0x1000, BL31_TEST_CODE_ENTRY);
+}
+
+static void put_valid_bl33(unsigned char *image, size_t size)
+{
+	if (size < TEST_BL33_SIZE)
+		return;
+	/* ARM B from payload +0 to payload +0x10. */
+	put_le32(image, 0xea000002U);
+}
+
 static void make_valid_fip(unsigned char image[FIP_SIZE])
 {
 	memset(image, 0, FIP_SIZE);
 	put_le32(image, 0xaa640001U);
 	put_le32(image + 4, 0x12345678U);
-	put_entry(image + FIP_HEADER_SIZE, scp_bl2_uuid, 256, 4);
-	put_entry(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE, bl31_uuid, 320, 5);
-	put_entry(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 2, bl33_uuid, 384, 6);
+	put_entry(image + FIP_HEADER_SIZE, scp_bl2_uuid,
+		  TEST_SCP_OFFSET, TEST_SCP_SIZE);
+	put_entry(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE, bl31_uuid,
+		  TEST_BL31_OFFSET, TEST_BL31_SIZE);
+	put_entry(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 2, bl33_uuid,
+		  TEST_BL33_OFFSET, TEST_BL33_SIZE);
 	put_entry(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 3,
-		  hw_config_uuid, 448, TEST_FDT_SIZE);
+		  hw_config_uuid, TEST_FDT_OFFSET, TEST_FDT_SIZE);
 	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 16, FIP_SIZE);
-	put_valid_fdt(image + 448, TEST_FDT_SIZE);
+	put_valid_scp(image + TEST_SCP_OFFSET, TEST_SCP_SIZE);
+	put_valid_bl31(image + TEST_BL31_OFFSET, TEST_BL31_SIZE);
+	put_valid_bl33(image + TEST_BL33_OFFSET, TEST_BL33_SIZE);
+	put_valid_fdt(image + TEST_FDT_OFFSET, TEST_FDT_SIZE);
 }
 
 static unsigned char *make_sized_fip(size_t scp_size, size_t bl31_size,
@@ -141,6 +197,9 @@ static unsigned char *make_sized_fip(size_t scp_size, size_t bl31_size,
 	put_entry(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 3,
 		  hw_config_uuid, hw_config_offset, hw_config_size);
 	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 16, fip_size);
+	put_valid_scp(image + scp_offset, scp_size);
+	put_valid_bl31(image + bl31_offset, bl31_size);
+	put_valid_bl33(image + bl33_offset, bl33_size);
 	if (hw_config_size >= TEST_FDT_SIZE)
 		put_valid_fdt(image + hw_config_offset, hw_config_size);
 	*image_size = fip_size;
@@ -274,34 +333,89 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
 
-	require_image("SCP_BL2", &layout.scp_bl2, 256, 4);
-	require_image("BL31", &layout.bl31, 320, 5);
-	require_image("BL33", &layout.bl33, 384, 6);
-	require_image("HW_CONFIG", &layout.hw_config, 448, TEST_FDT_SIZE);
+	require_image("SCP_BL2", &layout.scp_bl2,
+		      TEST_SCP_OFFSET, TEST_SCP_SIZE);
+	require_image("BL31", &layout.bl31,
+		      TEST_BL31_OFFSET, TEST_BL31_SIZE);
+	require_image("BL33", &layout.bl33,
+		      TEST_BL33_OFFSET, TEST_BL33_SIZE);
+	require_image("HW_CONFIG", &layout.hw_config,
+		      TEST_FDT_OFFSET, TEST_FDT_SIZE);
+
+	make_valid_fip(image);
+	memmove(image + TEST_SCP_OFFSET + 1, image + TEST_SCP_OFFSET,
+		TEST_SCP_SIZE);
+	put_entry(image + FIP_HEADER_SIZE, scp_bl2_uuid,
+		  TEST_SCP_OFFSET + 1, TEST_SCP_SIZE);
+	require_rejected("unaligned SCP_BL2 payload", image, sizeof(image));
+
+	make_valid_fip(image);
+	put_entry(image + FIP_HEADER_SIZE, scp_bl2_uuid,
+		  TEST_SCP_OFFSET, 1);
+	require_rejected("one-byte SCP_BL2", image, sizeof(image));
+
+	make_valid_fip(image);
+	put_entry(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE, bl31_uuid,
+		  TEST_BL31_OFFSET, 1);
+	require_rejected("one-byte BL31", image, sizeof(image));
+
+	make_valid_fip(image);
+	put_entry(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 2, bl33_uuid,
+		  TEST_BL33_OFFSET, 1);
+	require_rejected("one-byte BL33", image, sizeof(image));
+
+	make_valid_fip(image);
+	image[TEST_SCP_OFFSET] ^= 1;
+	require_rejected("invalid SCP_BL2 entry", image, sizeof(image));
+
+	make_valid_fip(image);
+	image[TEST_SCP_OFFSET + 8] ^= 1;
+	require_rejected("invalid SCP_BL2 trace address", image, sizeof(image));
+
+	make_valid_fip(image);
+	image[TEST_SCP_OFFSET + 12] ^= 1;
+	require_rejected("invalid SCP_BL2 trace value", image, sizeof(image));
+
+	make_valid_fip(image);
+	image[TEST_BL31_OFFSET] ^= 1;
+	require_rejected("invalid BL31 monitor branch", image, sizeof(image));
+
+	make_valid_fip(image);
+	put_le32(image + TEST_BL31_OFFSET + 0x1000, 0);
+	require_rejected("empty BL31 code entry", image, sizeof(image));
+
+	make_valid_fip(image);
+	put_le32(image + TEST_BL31_OFFSET + 0x1000, 0xffffffffU);
+	require_rejected("erased BL31 code entry", image, sizeof(image));
+
+	make_valid_fip(image);
+	image[TEST_BL33_OFFSET + 3] ^= 1;
+	require_rejected("invalid BL33 ARM entry", image, sizeof(image));
 
 	make_valid_fip(image);
 	put_entry(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4,
-		  bl31_uuid, 400, 4);
+		  bl31_uuid, TEST_UNKNOWN_OFFSET, 4);
 	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 5 + 16,
 		 FIP_SIZE);
 	require_rejected("duplicate BL31", image, sizeof(image));
 
 	make_valid_fip(image);
 	put_entry(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE,
-		  bl31_uuid, 500, 20);
+		  bl31_uuid, FIP_SIZE - 4, 20);
 	require_rejected("BL31 outside FIP buffer", image, sizeof(image));
 
 	make_valid_fip(image);
-	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 16, 389);
+	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 16,
+		 TEST_FDT_OFFSET + TEST_FDT_SIZE - 1);
 	require_rejected("payload beyond FIP end marker", image, sizeof(image));
 
 	make_valid_fip(image);
-	put_entry(image + FIP_HEADER_SIZE, scp_bl2_uuid, 100, 4);
+	put_entry(image + FIP_HEADER_SIZE, scp_bl2_uuid, 100, TEST_SCP_SIZE);
 	require_rejected("payload overlaps FIP metadata", image, sizeof(image));
 
 	make_valid_fip(image);
 	put_entry(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE,
-		  bl31_uuid, 258, 5);
+		  bl31_uuid, TEST_SCP_OFFSET + 2, TEST_BL31_SIZE);
 	require_rejected("FIP payloads overlap", image, sizeof(image));
 
 	make_valid_fip(image);
@@ -327,18 +441,22 @@ int main(int argc, char **argv)
 			fprintf(stderr, "FIP without HW_CONFIG was not copied safely\n");
 			return EXIT_FAILURE;
 		}
-		require_copy(&log, 0, SUNXI_FIP_BL31_BASE, image + 320, 5);
-		require_copy(&log, 1, SUNXI_FIP_BL33_BASE, image + 384, 6);
-		require_copy(&log, 2, SUNXI_FIP_SCP_BL2_BASE, image + 256, 4);
+		require_copy(&log, 0, SUNXI_FIP_BL31_BASE,
+			     image + TEST_BL31_OFFSET, TEST_BL31_SIZE);
+		require_copy(&log, 1, SUNXI_FIP_BL33_BASE,
+			     image + TEST_BL33_OFFSET, TEST_BL33_SIZE);
+		require_copy(&log, 2, SUNXI_FIP_SCP_BL2_BASE,
+			     image + TEST_SCP_OFFSET, TEST_SCP_SIZE);
 	}
 
 	make_valid_fip(image);
-	image[448] = 0;
+	image[TEST_FDT_OFFSET] = 0;
 	require_rejected("invalid HW_CONFIG FDT", image, sizeof(image));
 
 	make_valid_fip(image);
 	image[FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4] = 0x5a;
-	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 16, 400);
+	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 16,
+		 TEST_UNKNOWN_OFFSET);
 	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 24, 1);
 	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 5 + 16,
 		 FIP_SIZE);
@@ -349,36 +467,42 @@ int main(int argc, char **argv)
 
 	make_valid_fip(image);
 	image[FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4] = 0x5a;
-	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 16, 400);
+	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 16,
+		 TEST_UNKNOWN_OFFSET);
 	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 24, 1);
 	image[FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 5] = 0x5a;
-	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 5 + 16, 402);
+	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 5 + 16,
+		 TEST_UNKNOWN_OFFSET + 2);
 	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 5 + 24, 1);
 	put_le64(image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 6 + 16,
 		 FIP_SIZE);
 	require_rejected("duplicate unknown UUID", image, sizeof(image));
 
 	{
-		unsigned char large_image[2048] = { 0 };
+		unsigned char large_image[8192] = { 0 };
 		unsigned int i;
 
 		put_le32(large_image, 0xaa640001U);
 		put_le32(large_image + 4, 0x12345678U);
-		put_entry(large_image + FIP_HEADER_SIZE, scp_bl2_uuid, 1536, 4);
+		put_entry(large_image + FIP_HEADER_SIZE, scp_bl2_uuid,
+			  1536, TEST_SCP_SIZE);
 		put_entry(large_image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE,
-			  bl31_uuid, 1540, 5);
+			  bl31_uuid, 2048, TEST_BL31_SIZE);
 		put_entry(large_image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 2,
-			  bl33_uuid, 1545, 6);
+			  bl33_uuid, 6208, TEST_BL33_SIZE);
 		put_entry(large_image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 3,
-			  hw_config_uuid, 1552, TEST_FDT_SIZE);
-		put_valid_fdt(large_image + 1552, TEST_FDT_SIZE);
+			  hw_config_uuid, 6336, TEST_FDT_SIZE);
+		put_valid_scp(large_image + 1536, TEST_SCP_SIZE);
+		put_valid_bl31(large_image + 2048, TEST_BL31_SIZE);
+		put_valid_bl33(large_image + 6208, TEST_BL33_SIZE);
+		put_valid_fdt(large_image + 6336, TEST_FDT_SIZE);
 		for (i = 4; i < 32; i++) {
 			unsigned char *entry = large_image + FIP_HEADER_SIZE +
 					       FIP_ENTRY_SIZE * i;
 
 			entry[0] = 0xa5;
 			entry[1] = i;
-			put_le64(entry + 16, 1640 + (i - 4) * 2);
+			put_le64(entry + 16, 6400 + (i - 4) * 2);
 			put_le64(entry + 24, 1);
 		}
 		put_le64(large_image + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 32 + 16,
@@ -401,11 +525,15 @@ int main(int argc, char **argv)
 			fprintf(stderr, "got %u copy calls, expected 4\n", log.count);
 			return EXIT_FAILURE;
 		}
-		require_copy(&log, 0, SUNXI_FIP_BL31_BASE, image + 320, 5);
-		require_copy(&log, 1, SUNXI_FIP_BL33_BASE, image + 384, 6);
-		require_copy(&log, 2, SUNXI_FIP_HW_CONFIG_BASE, image + 448,
+		require_copy(&log, 0, SUNXI_FIP_BL31_BASE,
+			     image + TEST_BL31_OFFSET, TEST_BL31_SIZE);
+		require_copy(&log, 1, SUNXI_FIP_BL33_BASE,
+			     image + TEST_BL33_OFFSET, TEST_BL33_SIZE);
+		require_copy(&log, 2, SUNXI_FIP_HW_CONFIG_BASE,
+			     image + TEST_FDT_OFFSET,
 			     TEST_FDT_SIZE);
-		require_copy(&log, 3, SUNXI_FIP_SCP_BL2_BASE, image + 256, 4);
+		require_copy(&log, 3, SUNXI_FIP_SCP_BL2_BASE,
+			     image + TEST_SCP_OFFSET, TEST_SCP_SIZE);
 	}
 
 	{
@@ -522,8 +650,8 @@ int main(int argc, char **argv)
 	}
 
 	{
-		unsigned char disk_data[4096] = { 0 };
-		unsigned char staging[1536];
+		unsigned char disk_data[TEST_STAGED_DISK_SIZE] = { 0 };
+		unsigned char staging[FIP_SIZE];
 		struct fake_disk disk = {
 			.data = disk_data,
 			.size = sizeof(disk_data),
@@ -541,7 +669,7 @@ int main(int argc, char **argv)
 		    disk.calls[0].sector_count != 3 ||
 		    disk.calls[0].destination != staging ||
 		    disk.calls[1].start_sector != 4 ||
-		    disk.calls[1].sector_count != 1 ||
+		    disk.calls[1].sector_count != FIP_SIZE / 512 ||
 		    disk.calls[1].destination != staging ||
 		    loaded_size != FIP_SIZE ||
 		    memcmp(staging, disk_data + 4 * 512, FIP_SIZE) != 0) {
@@ -586,8 +714,8 @@ int main(int argc, char **argv)
 	}
 
 	{
-		unsigned char disk_data[2048] = { 0 };
-		unsigned char staging[1536];
+		unsigned char disk_data[FIP_SIZE] = { 0 };
+		unsigned char staging[FIP_SIZE];
 		struct fake_disk disk = {
 			.data = disk_data,
 			.size = sizeof(disk_data),
@@ -605,8 +733,8 @@ int main(int argc, char **argv)
 	}
 
 	{
-		unsigned char disk_data[4096] = { 0 };
-		unsigned char staging[1536];
+		unsigned char disk_data[512 + FIP_SIZE + 512] = { 0 };
+		unsigned char staging[FIP_SIZE + 512];
 		struct fake_disk disk = {
 			.data = disk_data,
 			.size = sizeof(disk_data),
@@ -615,19 +743,20 @@ int main(int argc, char **argv)
 
 		make_valid_fip(disk_data + 512);
 		put_le64(disk_data + 512 + FIP_HEADER_SIZE + FIP_ENTRY_SIZE * 4 + 16,
-			 513);
+			 FIP_SIZE + 1);
 		if (sunxi_fip_read_image(1, staging, sizeof(staging), fake_read,
 					 &disk, &loaded_size) != 0 ||
-		    disk.count != 2 || disk.calls[1].sector_count != 2 ||
-		    loaded_size != 513) {
+		    disk.count != 2 ||
+		    disk.calls[1].sector_count != FIP_SIZE / 512 + 1 ||
+		    loaded_size != FIP_SIZE + 1) {
 			fprintf(stderr, "unaligned FIP size was not read by sector ceiling\n");
 			return EXIT_FAILURE;
 		}
 	}
 
 	{
-		unsigned char disk_data[2048] = { 0 };
-		unsigned char staging[1536];
+		unsigned char disk_data[FIP_SIZE] = { 0 };
+		unsigned char staging[FIP_SIZE];
 		struct fake_disk disk = {
 			.data = disk_data,
 			.size = sizeof(disk_data),
@@ -645,7 +774,7 @@ int main(int argc, char **argv)
 	}
 
 	{
-		unsigned char disk_data[2048] = { 0 };
+		unsigned char disk_data[FIP_SIZE] = { 0 };
 		unsigned char *staging = malloc(0x200200);
 		struct fake_disk disk = {
 			.data = disk_data,
@@ -702,8 +831,8 @@ int main(int argc, char **argv)
 	}
 
 	{
-		unsigned char disk_data[8192] = { 0 };
-		unsigned char staging[1536];
+		unsigned char disk_data[TEST_DISK_SIZE] = { 0 };
+		unsigned char staging[FIP_SIZE];
 		struct fake_disk disk = {
 			.data = disk_data,
 			.size = sizeof(disk_data),
@@ -712,7 +841,8 @@ int main(int argc, char **argv)
 		unsigned int used_sector = 0;
 
 		make_valid_fip(disk_data + 512);
-		if (sunxi_fip_read_redundant(1, 8, staging, sizeof(staging),
+		if (sunxi_fip_read_redundant(1, TEST_BACKUP_SECTOR, staging,
+					     sizeof(staging),
 					     fake_read, &disk, &loaded_size,
 					     &used_sector) != 0 ||
 		    disk.count != 2 || disk.calls[0].start_sector != 1 ||
@@ -724,8 +854,8 @@ int main(int argc, char **argv)
 	}
 
 	{
-		unsigned char disk_data[8192] = { 0 };
-		unsigned char staging[1536];
+		unsigned char disk_data[TEST_DISK_SIZE] = { 0 };
+		unsigned char staging[FIP_SIZE];
 		struct fake_disk disk = {
 			.data = disk_data,
 			.size = sizeof(disk_data),
@@ -733,22 +863,48 @@ int main(int argc, char **argv)
 		size_t loaded_size = 0;
 		unsigned int used_sector = 0;
 
-		make_valid_fip(disk_data + 8 * 512);
-		if (sunxi_fip_read_redundant(1, 8, staging, sizeof(staging),
+		make_valid_fip(disk_data + 1 * 512);
+		make_valid_fip(disk_data + TEST_BACKUP_SECTOR * 512);
+		/* A one-byte contract corruption in the primary must select backup. */
+		disk_data[512 + TEST_BL31_OFFSET + 4] ^= 1;
+		if (sunxi_fip_read_redundant(1, TEST_BACKUP_SECTOR, staging,
+					     sizeof(staging), fake_read, &disk,
+					     &loaded_size, &used_sector) != 0 ||
+		    disk.count != 4 || loaded_size != FIP_SIZE ||
+		    used_sector != TEST_BACKUP_SECTOR) {
+			fprintf(stderr,
+				"semantic primary corruption did not select backup\n");
+			return EXIT_FAILURE;
+		}
+	}
+
+	{
+		unsigned char disk_data[TEST_DISK_SIZE] = { 0 };
+		unsigned char staging[FIP_SIZE];
+		struct fake_disk disk = {
+			.data = disk_data,
+			.size = sizeof(disk_data),
+		};
+		size_t loaded_size = 0;
+		unsigned int used_sector = 0;
+
+		make_valid_fip(disk_data + TEST_BACKUP_SECTOR * 512);
+		if (sunxi_fip_read_redundant(1, TEST_BACKUP_SECTOR, staging,
+					     sizeof(staging),
 					     fake_read, &disk, &loaded_size,
 					     &used_sector) != 0 ||
 		    disk.count != 3 || disk.calls[0].start_sector != 1 ||
-		    disk.calls[1].start_sector != 8 ||
-		    disk.calls[2].start_sector != 8 || loaded_size != FIP_SIZE ||
-		    used_sector != 8) {
+		    disk.calls[1].start_sector != TEST_BACKUP_SECTOR ||
+		    disk.calls[2].start_sector != TEST_BACKUP_SECTOR ||
+		    loaded_size != FIP_SIZE || used_sector != TEST_BACKUP_SECTOR) {
 			fprintf(stderr, "valid backup FIP was not selected\n");
 			return EXIT_FAILURE;
 		}
 	}
 
 	{
-		unsigned char disk_data[8192] = { 0 };
-		unsigned char staging[1536];
+		unsigned char disk_data[TEST_DISK_SIZE] = { 0 };
+		unsigned char staging[FIP_SIZE];
 		struct fake_disk disk = {
 			.data = disk_data,
 			.size = sizeof(disk_data),
@@ -758,13 +914,15 @@ int main(int argc, char **argv)
 		unsigned int used_sector = 0;
 
 		make_valid_fip(disk_data + 1 * 512);
-		make_valid_fip(disk_data + 8 * 512);
-		if (sunxi_fip_read_redundant(1, 8, staging, sizeof(staging),
+		make_valid_fip(disk_data + TEST_BACKUP_SECTOR * 512);
+		if (sunxi_fip_read_redundant(1, TEST_BACKUP_SECTOR, staging,
+					     sizeof(staging),
 					     fake_read, &disk, &loaded_size,
 					     &used_sector) != 0 ||
-		    disk.count != 4 || disk.calls[2].start_sector != 8 ||
-		    disk.calls[3].start_sector != 8 || loaded_size != FIP_SIZE ||
-		    used_sector != 8) {
+		    disk.count != 4 ||
+		    disk.calls[2].start_sector != TEST_BACKUP_SECTOR ||
+		    disk.calls[3].start_sector != TEST_BACKUP_SECTOR ||
+		    loaded_size != FIP_SIZE || used_sector != TEST_BACKUP_SECTOR) {
 			fprintf(stderr, "backup did not recover a complete-read failure\n");
 			return EXIT_FAILURE;
 		}
@@ -809,8 +967,8 @@ int main(int argc, char **argv)
 	}
 
 	{
-		unsigned char disk_data[8192] = { 0 };
-		unsigned char staging[1536];
+		unsigned char disk_data[TEST_DISK_SIZE] = { 0 };
+		unsigned char staging[FIP_SIZE];
 		struct fake_disk disk = {
 			.data = disk_data,
 			.size = sizeof(disk_data),
@@ -818,11 +976,12 @@ int main(int argc, char **argv)
 		size_t loaded_size = 123;
 		unsigned int used_sector = 456;
 
-		if (sunxi_fip_read_redundant(1, 8, staging, sizeof(staging),
+		if (sunxi_fip_read_redundant(1, TEST_BACKUP_SECTOR, staging,
+					     sizeof(staging),
 					     fake_read, &disk, &loaded_size,
 					     &used_sector) == 0 ||
 		    disk.count != 2 || disk.calls[0].start_sector != 1 ||
-		    disk.calls[1].start_sector != 8 ||
+		    disk.calls[1].start_sector != TEST_BACKUP_SECTOR ||
 		    loaded_size != 0 || used_sector != 0) {
 			fprintf(stderr, "invalid redundant FIPs were not rejected safely\n");
 			return EXIT_FAILURE;
@@ -830,8 +989,8 @@ int main(int argc, char **argv)
 	}
 
 	{
-		unsigned char disk_data[8192] = { 0 };
-		unsigned char staging[1536];
+		unsigned char disk_data[TEST_DISK_SIZE] = { 0 };
+		unsigned char staging[FIP_SIZE];
 		struct fake_disk disk = {
 			.data = disk_data,
 			.size = sizeof(disk_data),
@@ -841,7 +1000,8 @@ int main(int argc, char **argv)
 		unsigned int used_sector = 0;
 
 		make_valid_fip(disk_data + 512);
-		if (sunxi_fip_load_redundant(1, 8, staging, sizeof(staging),
+		if (sunxi_fip_load_redundant(1, TEST_BACKUP_SECTOR, staging,
+					     sizeof(staging),
 					     fake_read, &disk, record_copy, &log,
 					     &loaded_size, &used_sector) != 0 ||
 		    disk.count != 2 || log.count != 4 ||
@@ -849,11 +1009,15 @@ int main(int argc, char **argv)
 			fprintf(stderr, "valid redundant FIP was not loaded\n");
 			return EXIT_FAILURE;
 		}
-		require_copy(&log, 0, SUNXI_FIP_BL31_BASE, staging + 320, 5);
-		require_copy(&log, 1, SUNXI_FIP_BL33_BASE, staging + 384, 6);
-		require_copy(&log, 2, SUNXI_FIP_HW_CONFIG_BASE, staging + 448,
+		require_copy(&log, 0, SUNXI_FIP_BL31_BASE,
+			     staging + TEST_BL31_OFFSET, TEST_BL31_SIZE);
+		require_copy(&log, 1, SUNXI_FIP_BL33_BASE,
+			     staging + TEST_BL33_OFFSET, TEST_BL33_SIZE);
+		require_copy(&log, 2, SUNXI_FIP_HW_CONFIG_BASE,
+			     staging + TEST_FDT_OFFSET,
 			     TEST_FDT_SIZE);
-		require_copy(&log, 3, SUNXI_FIP_SCP_BL2_BASE, staging + 256, 4);
+		require_copy(&log, 3, SUNXI_FIP_SCP_BL2_BASE,
+			     staging + TEST_SCP_OFFSET, TEST_SCP_SIZE);
 	}
 
 	{
@@ -901,8 +1065,8 @@ int main(int argc, char **argv)
 	}
 
 	{
-		unsigned char disk_data[8192] = { 0 };
-		unsigned char staging[1536];
+		unsigned char disk_data[TEST_DISK_SIZE] = { 0 };
+		unsigned char staging[FIP_SIZE];
 		struct fake_disk disk = {
 			.data = disk_data,
 			.size = sizeof(disk_data),
@@ -912,8 +1076,9 @@ int main(int argc, char **argv)
 		unsigned int used_sector = 456;
 
 		make_valid_fip(disk_data + 512);
-		make_valid_fip(disk_data + 8 * 512);
-		if (sunxi_fip_load_redundant(1, 8, staging, sizeof(staging),
+		make_valid_fip(disk_data + TEST_BACKUP_SECTOR * 512);
+		if (sunxi_fip_load_redundant(1, TEST_BACKUP_SECTOR, staging,
+					     sizeof(staging),
 					     fake_read, &disk, record_copy, &log,
 					     &loaded_size, &used_sector) == 0 ||
 		    disk.count != 2 || log.count != 2 ||
@@ -924,8 +1089,8 @@ int main(int argc, char **argv)
 	}
 
 	{
-		unsigned char disk_data[8192] = { 0 };
-		unsigned char staging[1536];
+		unsigned char disk_data[TEST_DISK_SIZE] = { 0 };
+		unsigned char staging[FIP_SIZE];
 		struct fake_disk disk = {
 			.data = disk_data,
 			.size = sizeof(disk_data),
@@ -934,7 +1099,8 @@ int main(int argc, char **argv)
 		size_t loaded_size = 123;
 		unsigned int used_sector = 456;
 
-		if (sunxi_fip_load_redundant(1, 8, staging, sizeof(staging),
+		if (sunxi_fip_load_redundant(1, TEST_BACKUP_SECTOR, staging,
+					     sizeof(staging),
 					     fake_read, &disk, record_copy, &log,
 					     &loaded_size, &used_sector) == 0 ||
 		    disk.count != 2 || log.count != 0 ||

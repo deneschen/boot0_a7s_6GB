@@ -6,6 +6,7 @@
  */
 #include <common.h>
 #include <arch/gpio.h>
+#include <axp8191_voltage.h>
 
 #define A7S_MAIN_PIO_BANK_SIZE	0x80
 #define A7S_MAIN_PIO_CFG_BASE	0x80
@@ -48,29 +49,20 @@ struct a7s_axp8191_rail {
 	u8 voltage_mask;
 	u8 enable_reg;
 	u8 enable_bit;
-	u16 min_mv;
-	u16 max_mv;
-	u16 split1_mv;
-	u16 split2_mv;
-	u16 step0_mv;
-	u16 step1_mv;
-	u16 step2_mv;
-	u16 start_split3_mv;
-	u16 split3_mv;
-	u16 step3_mv;
+	enum a7s_axp8191_voltage_rail voltage_rail;
 };
 
 static const struct a7s_axp8191_rail a7s_dram_rails[] = {
 	{ "dcdc6", AXP8191_DCDC6_VOL, 0x7f, AXP8191_DCDC_CTRL1, 5,
-	  500, 2760, 1200, 1540, 10, 20, 20, 1800, 2400, 40 },
+	  A7S_AXP8191_DCDC6 },
 	{ "dcdc7", AXP8191_DCDC7_VOL, 0x7f, AXP8191_DCDC_CTRL1, 6,
-	  500, 1840, 1200, 0, 10, 20, 0, 0, 0, 0 },
+	  A7S_AXP8191_DCDC7 },
 	{ "dcdc8", AXP8191_DCDC8_VOL, 0x7f, AXP8191_DCDC_CTRL1, 7,
-	  500, 3400, 1200, 1840, 10, 20, 100, 0, 0, 0 },
+	  A7S_AXP8191_DCDC8 },
 	{ "eldo1", AXP8191_ELDO1_VOL, 0x3f, AXP8191_LDO_CTRL3, 6,
-	  500, 1500, 0, 0, 25, 0, 0, 0, 0, 0 },
+	  A7S_AXP8191_ELDO },
 	{ "eldo2", AXP8191_ELDO2_VOL, 0x3f, AXP8191_LDO_CTRL3, 7,
-	  500, 1500, 0, 0, 25, 0, 0, 0, 0, 0 },
+	  A7S_AXP8191_ELDO },
 };
 
 int pmic_bus_init(u32 device_addr, u32 runtime_addr);
@@ -182,6 +174,8 @@ static int a7s_axp8191_init(void)
 {
 	u8 chip_id;
 	u8 ext_cfg;
+	int status = 0;
+	int ret;
 
 	if (a7s_axp8191_ready)
 		return 0;
@@ -201,19 +195,41 @@ static int a7s_axp8191_init(void)
 	}
 
 	/* Match the vendor AXP8191 probe sequence before changing regulators. */
-	if (pmic_bus_write(AXP8191_RUNTIME_ADDR, AXP8191_WRITE_LOCK, 0x06) ||
-	    pmic_bus_write(AXP8191_RUNTIME_ADDR, AXP8191_EFUSE_CTRL, 0x04) ||
-	    pmic_bus_write(AXP8191_RUNTIME_ADDR, AXP8191_EXT_ADDR, 0x01))
-		return -1;
+	status = pmic_bus_write(AXP8191_RUNTIME_ADDR, AXP8191_WRITE_LOCK, 0x06);
+	if (status)
+		goto restore_normal_page;
+	status = pmic_bus_write(AXP8191_RUNTIME_ADDR, AXP8191_EFUSE_CTRL, 0x04);
+	if (status)
+		goto restore_normal_page;
+	status = pmic_bus_write(AXP8191_RUNTIME_ADDR, AXP8191_EXT_ADDR, 0x01);
+	if (status)
+		goto restore_normal_page;
+	status = pmic_bus_read(AXP8191_RUNTIME_ADDR, 0x00, &ext_cfg);
+	if (status)
+		goto restore_normal_page;
+	status = pmic_bus_write(AXP8191_RUNTIME_ADDR, 0x00,
+				ext_cfg | (1U << 6));
 
-	if (pmic_bus_read(AXP8191_RUNTIME_ADDR, 0x00, &ext_cfg) ||
-	    pmic_bus_write(AXP8191_RUNTIME_ADDR, 0x00, ext_cfg | (1U << 6)) ||
-	    pmic_bus_write(AXP8191_RUNTIME_ADDR, AXP8191_EXT_ADDR, 0x00) ||
-	    pmic_bus_write(AXP8191_RUNTIME_ADDR, AXP8191_EFUSE_CTRL, 0x00) ||
-	    pmic_bus_write(AXP8191_RUNTIME_ADDR, AXP8191_WRITE_LOCK, 0x00) ||
-	    a7s_axp8191_update_bits(AXP8191_AP_RESET_CTRL, 1U << 3,
-				     1U << 3))
-		return -1;
+restore_normal_page:
+	/* A failed extended-page access must not poison later regulator traffic. */
+	ret = pmic_bus_write(AXP8191_RUNTIME_ADDR, AXP8191_EXT_ADDR, 0x00);
+	if (!status && ret)
+		status = ret;
+	ret = pmic_bus_write(AXP8191_RUNTIME_ADDR, AXP8191_EFUSE_CTRL, 0x00);
+	if (!status && ret)
+		status = ret;
+	ret = pmic_bus_write(AXP8191_RUNTIME_ADDR, AXP8191_WRITE_LOCK, 0x00);
+	if (!status && ret)
+		status = ret;
+	if (status) {
+		printf("A7S PMU: extended configuration failed (%d)\n", status);
+		return status;
+	}
+
+	status = a7s_axp8191_update_bits(AXP8191_AP_RESET_CTRL, 1U << 3,
+					  1U << 3);
+	if (status)
+		return status;
 
 	a7s_axp8191_ready = 1;
 	printf("A7S PMU: AXP8191 ready on TWI6\n");
@@ -248,53 +264,10 @@ static const struct a7s_axp8191_rail *a7s_axp8191_find_rail(const char *name)
 	return 0;
 }
 
-static u8 a7s_axp8191_voltage_code(const struct a7s_axp8191_rail *rail,
-				  u32 millivolts)
-{
-	u32 code;
-
-	if (millivolts < rail->min_mv)
-		millivolts = rail->min_mv;
-	else if (millivolts > rail->max_mv)
-		millivolts = rail->max_mv;
-
-	if (rail->split3_mv && millivolts > rail->split3_mv) {
-		code = (rail->split1_mv - rail->min_mv) / rail->step0_mv;
-		code += (rail->split2_mv - rail->split1_mv) / rail->step1_mv;
-		code += (rail->split3_mv - rail->start_split3_mv) /
-			rail->step2_mv + 1;
-		return code +
-			(millivolts - rail->split3_mv / rail->step3_mv *
-			 rail->step3_mv) / rail->step3_mv;
-	}
-
-	if (rail->split3_mv && millivolts >= rail->start_split3_mv) {
-		code = (rail->split1_mv - rail->min_mv) / rail->step0_mv;
-		code += (rail->split2_mv - rail->split1_mv) / rail->step1_mv;
-		return code + (millivolts - rail->start_split3_mv) /
-			rail->step2_mv + 1;
-	}
-
-	if (rail->split2_mv && millivolts > rail->split2_mv) {
-		code = (rail->split1_mv - rail->min_mv) / rail->step0_mv;
-		code += (rail->split2_mv - rail->split1_mv) / rail->step1_mv;
-		return code +
-			(millivolts - rail->split2_mv / rail->step2_mv *
-			 rail->step2_mv) / rail->step2_mv;
-	}
-
-	if (rail->split1_mv && millivolts > rail->split1_mv) {
-		code = (rail->split1_mv - rail->min_mv) / rail->step0_mv;
-		return code + (millivolts - rail->split1_mv) / rail->step1_mv;
-	}
-
-	return (millivolts - rail->min_mv) / rail->step0_mv;
-}
-
 static int a7s_axp8191_set_rail(const char *name, int set_vol, int onoff)
 {
 	const struct a7s_axp8191_rail *rail = a7s_axp8191_find_rail(name);
-	u8 code;
+	unsigned int selector;
 
 	if (!rail) {
 		printf("A7S PMU: unsupported DRAM rail %s\n", name);
@@ -304,9 +277,15 @@ static int a7s_axp8191_set_rail(const char *name, int set_vol, int onoff)
 		return -1;
 
 	if (set_vol > 0) {
-		code = a7s_axp8191_voltage_code(rail, set_vol);
+		if (a7s_axp8191_voltage_selector(rail->voltage_rail, set_vol,
+					  &selector) ||
+		    selector & ~rail->voltage_mask) {
+			printf("A7S PMU: invalid voltage %d for %s\n", set_vol,
+			       name);
+			return -1;
+		}
 		if (a7s_axp8191_update_bits(rail->voltage_reg,
-					     rail->voltage_mask, code))
+					     rail->voltage_mask, selector))
 			return -1;
 	}
 
