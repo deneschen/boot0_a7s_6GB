@@ -36,6 +36,11 @@
 
 #define EXT_TIMER_CLK_REG(n)	(TIMER_CLK_BASE + n * 0x4)
 
+#define EXT_TIMER_ENABLE	(1U << 0)
+#define EXT_TIMER_RELOAD	(1U << 1)
+#define EXT_TIMER_MODE		(1U << 7)
+#define EXT_TIMER_POLL_LIMIT	100000U
+
 /* the status of timer, been used or free */
 typedef enum timer_status {
 	TIMER_FREE = 0,

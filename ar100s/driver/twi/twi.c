@@ -268,12 +268,14 @@ s32 twi_init(void)
 #ifdef TWI_DEBUG
 	printreg();
 #endif
-	if (readl(TWI_LCR) == 0x3a)
+	if (readl(TWI_LCR) == 0x3a) {
 		LOG("init twi succeeded\n");
-	else
+		return OK;
+	} else {
 		ERR("init twi failed!\n");
-
-	return OK;
+		twi_lock = 1;
+		return -EFAIL;
+	}
 }
 
 /*
@@ -599,4 +601,3 @@ s32 twi_standby_exit(void)
 {
 	return OK;
 }
-

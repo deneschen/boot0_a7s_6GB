@@ -43,10 +43,10 @@ void watchdog_reset(void);
 
 static u32 pmu_exist = FALSE;
 
-void pmu_shutdown(void)
+s32 pmu_shutdown(void)
 {
 	if (is_pmu_exist() == FALSE)
-		return;
+		return -ENODEV;
 
 	twi_standby_init();
 
@@ -58,13 +58,16 @@ void pmu_shutdown(void)
 	}
 
 	if (pmu_ops_p->pmu_shutdown)
-		pmu_ops_p->pmu_shutdown();
+		return pmu_ops_p->pmu_shutdown();
+
+	return -EFAIL;
 }
 
-void pmu_reset(void)
+s32 pmu_reset(void)
 {
 	if (is_pmu_exist() == FALSE) {
 		watchdog_reset();
+		return -ENODEV;
 	}
 
 	twi_standby_init();
@@ -77,13 +80,15 @@ void pmu_reset(void)
 	}
 
 	if (pmu_ops_p->pmu_reset)
-		pmu_ops_p->pmu_reset();
+		return pmu_ops_p->pmu_reset();
+
+	return -EFAIL;
 }
 
-void pmu_charging_reset(void)
+s32 pmu_charging_reset(void)
 {
 	if (is_pmu_exist() == FALSE)
-		return;
+		return -ENODEV;
 
 	twi_standby_init();
 
@@ -93,7 +98,9 @@ void pmu_charging_reset(void)
 	}
 
 	if (pmu_ops_p->pmu_charging_reset)
-		pmu_ops_p->pmu_charging_reset();
+		return pmu_ops_p->pmu_charging_reset();
+
+	return -EFAIL;
 }
 
 s32 pmu_set_voltage(u32 type, u32 voltage)

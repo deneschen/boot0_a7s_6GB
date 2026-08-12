@@ -93,7 +93,11 @@ s32 time_ticks_init(void)
 		/*start sysem time tick. period base on ms. */
 		time_ticks = 0;
 		period = 1000 / TICK_PER_SEC;
-		timer_start(htimer, period, TIMER_MODE_PERIOD);
+		if (timer_start(htimer, period, TIMER_MODE_PERIOD) != OK) {
+			timer_release(htimer);
+			htimer = NULL;
+			return -EFAIL;
+		}
 
 		INF("setup timer server succeeded\n");
 		return OK;

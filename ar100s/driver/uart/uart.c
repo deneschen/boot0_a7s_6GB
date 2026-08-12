@@ -15,6 +15,27 @@ volatile static u32 uart_rate;
 extern u32 dtb_base;
 
 #define IS_TX_FIFO_EMPTY  (readl(UART_REG_USR) & (0x1 << 2))
+#define UART_POLL_LIMIT   1000000U
+
+static s32 uart_divisor(u32 freq, u32 rate, u32 *divisor)
+{
+	u32 denominator;
+	u32 rounded;
+
+	if (!freq || !rate || !divisor)
+		return -EINVAL;
+	/* A UART baud above its source clock is invalid and keeps rate*16 safe. */
+	if (rate > freq || rate > 0xffffffffU / 16U)
+		return -EINVAL;
+	denominator = rate * 16U;
+	if (freq > 0xffffffffU - denominator / 2U)
+		return -EINVAL;
+	rounded = (freq + denominator / 2U) / denominator;
+	if (!rounded || rounded > 0xffffU)
+		return -EINVAL;
+	*divisor = (u32)rounded;
+	return OK;
+}
 
 #ifdef CFG_FDT_INIT_ARISC_UART_USED
 static s32 uart_init_from_dts(void)
@@ -79,6 +100,10 @@ static s32 uart_init_from_dts(void)
 
 s32 uart_clkchangecb(u32 command, u32 freq)
 {
+	u32 timeout;
+	s32 ret;
+
+	(void)freq;
 	if (uart_pin_not_used)
 		return -EACCES;
 
@@ -86,10 +111,13 @@ s32 uart_clkchangecb(u32 command, u32 freq)
 	case CCU_CLK_CLKCHG_REQ:
 		{
 			/* clock will be change */
-			INF("uart source clock change request\n");
-			/* wait uart transmit fifo empty */
-			while (!IS_TX_FIFO_EMPTY)
-				continue;
+				INF("uart source clock change request\n");
+				/* wait uart transmit fifo empty */
+				timeout = UART_POLL_LIMIT;
+				while (!IS_TX_FIFO_EMPTY) {
+					if (!--timeout)
+						return -ETIMEOUT;
+				}
 			/* lock uart */
 			uart_lock = 1;
 			return OK;
@@ -97,7 +125,9 @@ s32 uart_clkchangecb(u32 command, u32 freq)
 	case CCU_CLK_CLKCHG_DONE:
 		{
 			/* reconfig uart current baudrate */
-			uart_set_baudrate(uart_rate);
+				ret = uart_set_baudrate(uart_rate);
+				if (ret != OK)
+					return ret;
 			uart_lock = 0;
 			INF("uart buadrate change done\n");
 			return OK;
@@ -121,10 +151,10 @@ s32 uart_init(void)
 
 	uart_rate = UART_BAUDRATE;
 #ifndef CFG_FDT_INIT_ARISC_UART_USED
-	if (!uart_pin_not_used) {
-		pin_set_multi_sel(PIN_GRP_PL, 2, 2);
-		pin_set_multi_sel(PIN_GRP_PL, 3, 2);
-	}
+	/* A733 PL2/PL3 function 3 is S_UART0 at R_UART_REG_BASE. */
+	pin_set_multi_sel(PIN_GRP_PL, 2, 3);
+	pin_set_multi_sel(PIN_GRP_PL, 3, 3);
+	uart_pin_not_used = 0;
 #else
 	if (uart_init_from_dts() < 0)
 		uart_pin_not_used = 1;
@@ -145,7 +175,8 @@ s32 uart_init(void)
 #else
 	apb0_clk = 24000000;
 #endif
-	div = (apb0_clk + (uart_rate << 3)) / (uart_rate << 4);
+	if (uart_divisor(apb0_clk, uart_rate, &div) != OK)
+		return -EINVAL;
 
 	/* initialize uart controller */
 	lcr = readl(UART_REG_LCR);
@@ -200,11 +231,15 @@ s32 uart_exit(void)
  */
 s32 uart_putc(char ch)
 {
+	u32 timeout = UART_POLL_LIMIT;
+
 	if (uart_lock || uart_pin_not_used)
 		return -EACCES;
 
-	while (!(readl(UART_REG_USR) & 2)) /* fifo is full, check again */
-		;
+	while (!(readl(UART_REG_USR) & 2)) { /* fifo is full, check again */
+		if (!--timeout)
+			return -ETIMEOUT;
+	}
 
 	/* write out charset to transmit fifo */
 	writel(ch, UART_REG_THR);
@@ -242,15 +277,22 @@ u32 uart_get(char *buf)
  */
 s32 uart_puts(const char *string)
 {
+	s32 ret;
+
 	if (uart_lock || uart_pin_not_used)
 		return -EACCES;
 
 	ASSERT(string != NULL);
 
 	while (*string != '\0') {
-		if (*string == '\n') /* if current character is '\n', insert output with '\r' */
-			uart_putc('\r');
-		uart_putc(*string++);
+		if (*string == '\n') { /* insert '\r' before '\n' */
+			ret = uart_putc('\r');
+			if (ret != OK)
+				return ret;
+		}
+		ret = uart_putc(*string++);
+		if (ret != OK)
+			return ret;
 	}
 
 	return OK;
@@ -262,17 +304,16 @@ s32 uart_set_baudrate(u32 rate)
 	u32 div;
 	u32 lcr;
 	u32 halt;
+	u32 timeout = UART_POLL_LIMIT;
 
 	if (uart_pin_not_used)
 		return -EACCES;
 
-	/* update current uart baudrate */
-	LOG("uart buadrate change from [%d] to [%d]\n", uart_rate, rate);
-	uart_rate = rate;
-
 	/* wait uart transmit fifo empty */
-	while (readl(UART_REG_TFL))
-		continue;
+	while (readl(UART_REG_TFL)) {
+		if (!--timeout)
+			return -ETIMEOUT;
+	}
 
 	/* reconfig uart baudrate */
 #ifdef CFG_FPGA_PLATFORM
@@ -280,11 +321,10 @@ s32 uart_set_baudrate(u32 rate)
 #else
 	freq = ccu_get_sclk_freq(CCU_SYS_CLK_APBS2);
 #endif
-	div  = (freq + (uart_rate << 3)) / (uart_rate << 4);
+	if (uart_divisor(freq, rate, &div) != OK)
+		return -EINVAL;
 	lcr  = readl(UART_REG_LCR);
-
-	if (div == 0) /* avoid config invalid value */
-		div = 1;
+	LOG("uart baudrate change from [%d] to [%d]\n", uart_rate, rate);
 
 	/* enable change when busy */
 	halt = readl(UART_REG_HALT) | 0x2;
@@ -305,12 +345,18 @@ s32 uart_set_baudrate(u32 rate)
 	writel(halt, UART_REG_HALT);
 
 	/* waiting update */
-	while (readl(UART_REG_HALT) & 0x4)
-		continue;
+	timeout = UART_POLL_LIMIT;
+	while (readl(UART_REG_HALT) & 0x4) {
+		if (!--timeout) {
+			writel(lcr, UART_REG_LCR);
+			return -ETIMEOUT;
+		}
+	}
 
 	/* disable change when busy */
 	halt = readl(UART_REG_HALT) | 0x4;
 	writel(halt & (~0x2), UART_REG_HALT);
+	uart_rate = rate;
 
 	return OK;
 }

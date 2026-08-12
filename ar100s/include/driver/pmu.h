@@ -905,9 +905,9 @@ typedef struct pmu_onoff_reg_bitmap {
 extern pmu_onoff_reg_bitmap_t pmu_onoff_reg_bitmap[];
 
 typedef struct pmu_ops {
-	void (*pmu_shutdown)(void);
-	void (*pmu_reset)(void);
-	void (*pmu_charging_reset)(void);
+	s32 (*pmu_shutdown)(void);
+	s32 (*pmu_reset)(void);
+	s32 (*pmu_charging_reset)(void);
 	s32 (*pmu_set_voltage_state)(u32 type, u32 state);
 	s32 (*pmu_clear_pendings)(void);
 } pmu_ops_t;
@@ -1001,9 +1001,9 @@ extern s32 pmu_exit(void);
 extern u32 is_pmu_exist(void);
 extern s32 pmu_reg_write_para(pmu_paras_t *para);
 extern s32 pmu_reg_read_para(pmu_paras_t *para);
-extern void pmu_shutdown(void);
-extern void pmu_reset(void);
-extern void pmu_charging_reset(void);
+extern s32 pmu_shutdown(void);
+extern s32 pmu_reset(void);
+extern s32 pmu_charging_reset(void);
 extern s32 pmu_standby_init(void);
 extern s32 pmu_standby_exit(void);
 #else
@@ -1012,9 +1012,9 @@ static inline s32 pmu_exit(void) { return -1; }
 static inline s32 is_pmu_exist(void) { return -1; }
 static inline s32 pmu_reg_write_para(pmu_paras_t *para) { return -1; }
 static inline s32 pmu_reg_read_para(pmu_paras_t *para) { return -1; }
-static inline void pmu_shutdown(void) { return; }
-static inline void pmu_reset(void) { return; }
-static inline void pmu_charging_reset(void) { return; }
+static inline s32 pmu_shutdown(void) { return -ENODEV; }
+static inline s32 pmu_reset(void) { return -ENODEV; }
+static inline s32 pmu_charging_reset(void) { return -ENODEV; }
 static inline s32 pmu_standby_init(void) { return -1; }
 static inline s32 pmu_standby_exit(void) { return -1; }
 #endif
