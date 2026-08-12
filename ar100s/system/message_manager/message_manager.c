@@ -146,10 +146,14 @@ reply:
 	pmessage->result = result;
 
 	/* synchronous message, should feedback process result */
-	if (pmessage->attr & (MESSAGE_ATTR_SOFTSYN | MESSAGE_ATTR_HARDSYN))
-		hwmsgbox_feedback_message(pmessage, SEND_MSG_TIMEOUT);
+	if (pmessage->attr & (MESSAGE_ATTR_SOFTSYN | MESSAGE_ATTR_HARDSYN)) {
+		s32 feedback = hwmsgbox_feedback_message(pmessage, SEND_MSG_TIMEOUT);
 
-	return OK;
+		if (feedback != OK)
+			return feedback;
+	}
+
+	return result;
 }
 
 /**
@@ -160,6 +164,8 @@ reply:
  */
 s32 message_coming_notify(struct message *pmessage)
 {
+	s32 ret;
+
 	/*
 	 * be careful, here we keep cpu interrupt on when processing message,
 	 * and we should avoid interrupt as far as possible.
@@ -172,8 +178,11 @@ s32 message_coming_notify(struct message *pmessage)
 	INF("attr:%x\n", pmessage->attr);
 	INF("count: 0x%x\n", pmessage->count);
 
-	if (process_message(pmessage) != OK)
+	ret = process_message(pmessage);
+	if (ret != OK) {
 		WRN("message [%x, %x] process fail\n", pmessage, pmessage->type);
+		return ret;
+	}
 
 	return OK;
 }

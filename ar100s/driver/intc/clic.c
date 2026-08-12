@@ -29,6 +29,17 @@
 #define CLIC_INT_CTL(n)		(RISCV_CLIC_BASE + 0x1003 + 0x4*n) // byte
 #define CLIC_INT_REG(n)		(RISCV_CLIC_BASE + 0x1000 + 0x4*n) // word
 
+/* A733 lists interrupt IDs 0..79; CLIC_INFO reports the implemented subset. */
+#define CLIC_IRQ_MAX		(80)
+#define CLIC_INFO_NUM_INTERRUPT_MASK	(0x1fff)
+#define CLIC_CFG_RESET_VALUE	(0x00000001)
+#define CLIC_INT_RESET_VALUE	(0x1fc00000)
+
+_Static_assert(IRQ_SOUCE_MAX <= CLIC_IRQ_MAX,
+	       "software interrupt table exceeds the A733 CLIC");
+_Static_assert((CLIC_INT_RESET_VALUE & 0x101) == 0,
+	       "CLIC reset state must clear CLICINTIE and writable CLICINTIP");
+
 #define CLINT_MSPI_REG		(RISCV_CLINT_BASE + 0x0000)
 #define CLINT_MTIMECMPLO_REG	(RISCV_CLINT_BASE + 0x4000)
 #define CLINT_MTIMECMPHI_REG	(RISCV_CLINT_BASE + 0x4004)
@@ -51,6 +62,24 @@
 */
 s32 intc_init(void)
 {
+	u32 intno;
+	u32 irq_count = readl(CLIC_INFO) & CLIC_INFO_NUM_INTERRUPT_MASK;
+
+	if (irq_count < IRQ_SOUCE_MAX || irq_count > CLIC_IRQ_MAX)
+		return -EINVAL;
+
+	/*
+	 * Warm reset does not guarantee that CLIC state was reset.  Restore every
+	 * implemented interrupt register before mstatus.MIE is enabled.  IP is
+	 * read-only for level interrupts; for pulse interrupts writing zero clears
+	 * a stale pending bit.
+	 */
+	for (intno = 0; intno < irq_count; intno++)
+		writel(CLIC_INT_RESET_VALUE, CLIC_INT_REG(intno));
+
+	writel(CLIC_CFG_RESET_VALUE, CLIC_CFG);
+	writel(0, CLIC_MINTTHRESH);
+
 	return OK;
 }
 
@@ -133,7 +162,7 @@ s32 intc_interrupt_clear_pending(u32 intno)
 	/*intno can't beyond then IRQ_SOURCE_MAX */
 	ASSERT(intno < IRQ_SOUCE_MAX);
 
-	writeb(readb(CLIC_INT_IP(intno)) | 0x1, CLIC_INT_IP(intno));
+	writeb(readb(CLIC_INT_IP(intno)) & (~0x1), CLIC_INT_IP(intno));
 
 	return OK;
 }
@@ -182,9 +211,10 @@ s32 intc_set_group_config(u32 grp_irq_num, u32 mask)
 
 	u32 bit_os = grp_irq_num % 32;
 	u32 reg_os = (grp_irq_num / 32) * 0x4;
-	u32 reg = R_INTC_REG_BASE + 0xc0 + reg_os;
+	u32 reg = R_INTC_REG_BASE + 0x10 + reg_os;
 
-	writeb((readb(reg) & (~(0x1 << bit_os))) | ((mask & 0x1) << bit_os), reg);
+	writel((readl(reg) & (~(0x1U << bit_os))) |
+	       ((mask & 0x1U) << bit_os), reg);
 
 	return OK;
 }

@@ -31,6 +31,14 @@ _start:
 .cfi_startproc
 .cfi_undefined ra
 
+# Keep traps masked until mtvec and the software ISR table are ready.
+  csrci mstatus, 0x8
+
+# Hardware breadcrumb: first instruction completed.
+  li  x5, 0x0709011c
+  li  x6, 0xe9020001
+  sw  x6, 0(x5)
+
 # PART 1: initialize all registers
   li  x1, 0
   li  x2, 0
@@ -57,21 +65,29 @@ cpu_0_sp:
  li a3, 0
  la a4, metal_segment_stack_begin
 init_sp:
- sw a3,0(a4)
- addi a4,a4,4
- bne a4,x2,init_sp
+  sw a3,0(a4)
+  addi a4,a4,4
+  bne a4,x2,init_sp
+
+  li  x5, 0x0709011c
+  li  x6, 0xe9020002
+  sw  x6, 0(x5)
 
 # PART 3:initialize mtvec value
   la    a3,__trap_handler
   csrw  mtvec,a3
   csrw  0x307,a3   /* mtvt (T-Head/CLIC CSR) */
 
-  # enable mie
-  li   a3, 0x8
-  csrs mstatus,a3
+  li  x5, 0x0709011c
+  li  x6, 0xe9020003
+  sw  x6, 0(x5)
 
   /*Zero bss*/
   jal	clean_bss
+
+  li  x5, 0x0709011c
+  li  x6, 0xe9020004
+  sw  x6, 0(x5)
 
   jal	startup_entry
 
@@ -126,34 +142,38 @@ j __synchronous_exception
 __synchronous_exception:
   #push
 
-  addi sp,sp,-16*8
-  sw   x1,0*8(sp)
-  sw   x5,1*8(sp)
-  sw   x6,2*8(sp)
-  sw   x7,3*8(sp)
-  sw   a0,4*8(sp)
-  sw   a1,5*8(sp)
-  sw   a2,6*8(sp)
-  sw   a3,7*8(sp)
-  sw   a4,8*8(sp)
-  sw   a5,9*8(sp)
+  /* RV32E caller-saved registers, padded to the 16-byte ABI alignment. */
+  addi sp,sp,-48
+  sw   x1,0(sp)
+  sw   x5,4(sp)
+  sw   x6,8(sp)
+  sw   x7,12(sp)
+  sw   a0,16(sp)
+  sw   a1,20(sp)
+  sw   a2,24(sp)
+  sw   a3,28(sp)
+  sw   a4,32(sp)
+  sw   a5,36(sp)
+  li   t0,0x0709011c
+  li   t1,0xe90200ee
+  sw   t1,0(t0)
   csrr a0,mcause
   csrr a1,mepc
   call hadle_trap
   csrw mepc,a0
 
-  lw   x1,0*8(sp)
-  lw   x5,1*8(sp)
-  lw   x6,2*8(sp)
-  lw   x7,3*8(sp)
-  lw   a0,4*8(sp)
-  lw   a1,5*8(sp)
-  lw   a2,6*8(sp)
-  lw   a3,7*8(sp)
-  lw   a4,8*8(sp)
-  lw   a5,9*8(sp)
+  lw   x1,0(sp)
+  lw   x5,4(sp)
+  lw   x6,8(sp)
+  lw   x7,12(sp)
+  lw   a0,16(sp)
+  lw   a1,20(sp)
+  lw   a2,24(sp)
+  lw   a3,28(sp)
+  lw   a4,32(sp)
+  lw   a5,36(sp)
 
-  addi sp,sp,16*8
+  addi sp,sp,48
   mret
 
 
@@ -173,5 +193,3 @@ envp:
 .dc.a 0
 name:
 .asciz "libgloss"
-
-

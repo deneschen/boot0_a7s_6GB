@@ -26,6 +26,7 @@ void cpu_flush_cache(void);
 /* enable and disable interrupt */
 s32  cpu_disable_int(void);
 void cpu_enable_int(int cpsr);
+void cpu_enable_global_int(void);
 
 /* cpu initialize */
 void cpu_init(void);
