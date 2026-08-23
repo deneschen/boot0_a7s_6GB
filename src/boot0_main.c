@@ -177,6 +177,7 @@ void main(void)
 			(struct spare_monitor_head *)(phys_addr_t)monitor_base;
 		monitor_head->secureos_base = 0;
 		monitor_head->nboot_base = uboot_base;
+		monitor_head->dram_size_mib = dram_size;
 	}
 
 	printf("Jump to second Boot.\n");

@@ -112,7 +112,8 @@ struct spare_monitor_head
 	unsigned int  secureos_base;      /* the size of uboot */
 	unsigned char version[8];         /* uboot version */
 	unsigned char platform[8];        /* platform information */
-	int           reserved[1];         /*stamp space, 16bytes align */
+	int           reserved[1];        /* monitor load address at offset 0x2c */
+	unsigned int  dram_size_mib;      /* boot0 detected DRAM, offset 0x30 */
 };
 
 struct display_params {
