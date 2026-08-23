@@ -10,7 +10,7 @@ cd /home/denes/Allwinner/A7S/boot0-A7S
 make clean && make -j4 verify-all
 ./build_boot.sh --skip-scp --skip-uboot
 sha256sum build/boot0_sdcard_sun60iw2p1.bin build/fip.bin
-sudo ../Share/flash.sh /dev/sdX
+sudo bash ../Share/flash.sh /dev/sdX
 ```
 
 `/dev/sdX` 必须替换为目标卡。刷写后完全断电再上电，不要只执行 warm reset。

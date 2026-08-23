@@ -220,4 +220,4 @@ ls -l "${BUILD}/boot0_sdcard_sun60iw2p1.bin" "${BUILD}/scp.bin" \
 if [ "${USE_HW_CONFIG}" -eq 1 ]; then
 	ls -l "${HW_CONFIG}"
 fi
-echo "=== flash with: sudo ../Share/flash.sh /dev/sdX ==="
+echo "=== flash with: sudo bash ../Share/flash.sh /dev/sdX ==="
