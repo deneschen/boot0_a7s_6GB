@@ -37,11 +37,16 @@ static const struct a7s_axp8191_linear_range eldo_ranges[] = {
 	{ 500, 0x00, 0x28, 25 },
 };
 
+static const struct a7s_axp8191_linear_range cldo_ranges[] = {
+	{ 500, 0x00, 0x1d, 100 },
+};
+
 static const struct a7s_axp8191_voltage_desc voltage_descs[] = {
 	[A7S_AXP8191_DCDC6] = { dcdc6_ranges, ARRAY_SIZE(dcdc6_ranges) },
 	[A7S_AXP8191_DCDC7] = { dcdc7_ranges, ARRAY_SIZE(dcdc7_ranges) },
 	[A7S_AXP8191_DCDC8] = { dcdc8_ranges, ARRAY_SIZE(dcdc8_ranges) },
 	[A7S_AXP8191_ELDO] = { eldo_ranges, ARRAY_SIZE(eldo_ranges) },
+	[A7S_AXP8191_CLDO] = { cldo_ranges, ARRAY_SIZE(cldo_ranges) },
 };
 
 static unsigned int range_max_mv(const struct a7s_axp8191_linear_range *range)

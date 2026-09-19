@@ -101,6 +101,8 @@ OBJS := $(BUILD)/boot0_entry.o \
         $(BUILD)/sunxi_fip.o \
         $(BUILD)/platform_shims.o
 
+OBJS += $(BUILD)/mmc_a733.o
+
 # Real pre-built closed blob.
 #
 #   board_sdcard.o : the genuine vendor SD/MMC boot blob for a733/sun60iw2p1.
@@ -172,6 +174,7 @@ test: $(BUILD)/test_sunxi_fip $(CLOCK_TEST) $(HW_CONFIG_TEST) \
 	$(CLOCK_TEST)
 	$(HW_CONFIG_TEST) $(A7S_HW_CONFIG_DTB)
 	$(AXP8191_VOLTAGE_TEST)
+	python3 $(TOP)/tests/test_mmc_a733.py
 
 test-sanitize: $(SANITIZED_FIP_TEST)
 	ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 $<
@@ -322,6 +325,9 @@ $(BUILD)/axp8191_voltage.o: $(TOP)/src/axp8191_voltage.c \
 
 $(BUILD)/platform_shims.o: $(TOP)/src/platform_shims.c \
 				  $(TOP)/include/axp8191_voltage.h | $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/mmc_a733.o: $(TOP)/src/mmc_a733.c | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # Export the blob's local MMC device table so the real-silicon registration

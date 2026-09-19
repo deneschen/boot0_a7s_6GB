@@ -331,7 +331,15 @@ int a7s_clock_init(void)
 		return A7S_CLOCK_ERR_REF_PLL;
 	if (a7s_peri_pll_init(PLL_PERI0_CTRL_REG, 100))
 		return A7S_CLOCK_ERR_PERI0_PLL;
-	if (a7s_peri_pll_init(PLL_PERI1_CTRL_REG, 104)) {
+	/*
+	 * Keep PLL_PERI1 at its nominal 1200 MHz (factor 100, same as PERI0).
+	 * A previous revision used 104 (1248 MHz) so SDC2 could divide down to
+	 * exactly 52 MHz, but the kernel inherits this rate: SMHC2/eMMC then
+	 * asked for 200 MHz and only got 156 MHz (1248/8), and the HS200/HS400
+	 * delay tables (tuned for the nominal tree) never matched, so every
+	 * command above 26 MHz failed with response CRC errors.
+	 */
+	if (a7s_peri_pll_init(PLL_PERI1_CTRL_REG, 100)) {
 		a7s_bus_use_sys24();
 		return A7S_CLOCK_ERR_PERI1_PLL;
 	}

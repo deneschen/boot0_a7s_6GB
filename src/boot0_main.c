@@ -20,6 +20,17 @@
 #include <sunxi_flashmap.h>
 #include <hw_config_a733.h>
 
+/*
+ * Diagnostic switch (2026-09-17).  Default off: booting the kernel with SDC2
+ * already initialised by boot0 broke the kernel's high-speed eMMC bring-up
+ * (HS200 failed at cmd 13 RD RE RCE at 52 MHz).  With the preinit skipped the
+ * kernel enumerates the card as HS400; the vendor boot chain likewise leaves
+ * SDC2 untouched when booting from SDC0.  Set to 1 to restore the preinit.
+ */
+#ifndef A7S_EMMC_PREINIT
+#define A7S_EMMC_PREINIT 0
+#endif
+
 #ifndef CONFIG_SUNXI_FIP
 #error "This A733 boot0 build requires the FIP-only boot path"
 #endif
@@ -65,6 +76,7 @@ static int load_fip_images(phys_addr_t *uboot_base,
 		phys_addr_t *monitor_base, struct fip_boot_images *images);
 static int run_fip_handoff(const struct fip_boot_images *images);
 static int boot0_clear_env(void);
+static void a7s_emmc_preinit(void);
 __maybe_unused int load_kernel_from_spinor(u32 *);
 __maybe_unused void startup_kernel(u32, u32);
 void a7s_early_uart_init(void);
@@ -165,6 +177,15 @@ void main(void)
 	if (status != 0)
 		goto _BOOT_ERROR;
 
+#if A7S_EMMC_PREINIT
+	/*
+	 * The vendor eMMC boot path initializes SDC2 at 8-bit/50 MHz before
+	 * entering U-Boot.  When booting this diagnostic image from SDC0,
+	 * reproduce that state only after every FIP sector has been read.
+	 */
+	a7s_emmc_preinit();
+#endif
+
 	/*
 	 * BL33 is a raw mainline U-Boot image whose first byte is executable
 	 * code, not a vendor spare header. Treat it as immutable and only pass
@@ -187,6 +208,35 @@ _BOOT_ERROR:
 	boot0_clear_env();
 	boot0_jmp(FEL_BASE);
 
+}
+
+static void a7s_emmc_preinit(void)
+{
+	static const normal_gpio_cfg emmc_gpio[12] = {
+		/* Exact card2_boot_para order used by the vendor boot0. */
+		{3, 5,  3, 1, 1, 0xff, {0}}, /* CLK */
+		{3, 6,  3, 1, 1, 0xff, {0}}, /* CMD */
+		{3, 10, 3, 1, 1, 0xff, {0}}, /* DAT0 */
+		{3, 13, 3, 1, 1, 0xff, {0}}, /* DAT1 */
+		{3, 15, 3, 1, 1, 0xff, {0}}, /* DAT2 */
+		{3, 8,  3, 1, 1, 0xff, {0}}, /* DAT3 */
+		{3, 9,  3, 1, 1, 0xff, {0}}, /* DAT4 */
+		{3, 11, 3, 1, 1, 0xff, {0}}, /* DAT5 */
+		{3, 14, 3, 1, 1, 0xff, {0}}, /* DAT6 */
+		{3, 16, 3, 1, 1, 0xff, {0}}, /* DAT7 */
+		{3, 1,  3, 1, 1, 0xff, {0}}, /* RST_n */
+		{3, 0,  3, 2, 1, 0xff, {0}}, /* DS */
+	};
+	int ret;
+
+	/*
+	 * The fourth argument is an entry offset into a shared storage GPIO
+	 * table.  This is already an SDC2-only table, so its offset is zero;
+	 * passing 16 here makes the vendor blob read twelve entries beyond it.
+	 */
+	printf("A7S eMMC preinit: SDC2 8-bit mux3 CLK=PC5 CMD=PC6 offset=0 start\n");
+	ret = sunxi_mmc_init(2, 8, emmc_gpio, 0);
+	printf("A7S eMMC preinit: %s (%d)\n", ret < 0 ? "failed" : "ok", ret);
 }
 
 static int fip_mmc_read(u32 start_sector, u32 sector_count,

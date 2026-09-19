@@ -57,6 +57,13 @@ static void test_eldo(void)
 	expect_selector(A7S_AXP8191_ELDO, 1500, 0x28);
 }
 
+static void test_cldo(void)
+{
+	expect_selector(A7S_AXP8191_CLDO, 500, 0x00);
+	expect_selector(A7S_AXP8191_CLDO, 1800, 0x0d);
+	expect_selector(A7S_AXP8191_CLDO, 3400, 0x1d);
+}
+
 int main(void)
 {
 	unsigned int selector;
@@ -65,6 +72,7 @@ int main(void)
 	test_dcdc7();
 	test_dcdc8();
 	test_eldo();
+	test_cldo();
 	assert(a7s_axp8191_voltage_selector(A7S_AXP8191_VOLTAGE_RAIL_COUNT,
 					     1000, &selector) == -1);
 	assert(a7s_axp8191_voltage_selector(A7S_AXP8191_DCDC6, 1000, NULL) ==

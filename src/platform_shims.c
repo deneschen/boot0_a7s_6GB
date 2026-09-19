@@ -25,6 +25,19 @@
 #define A7S_MMC0_PF_DRV		(SUNXI_PIO_BASE + 0x320)
 #define A7S_MMC0_PF_PULL		(SUNXI_PIO_BASE + 0x330)
 
+#define A7S_SOC_VERSION_REG		0x03000024
+#define A7S_SOC_VERSION_MASK		0x7
+#define A7S_SOC_VERSION_B		1
+
+#define A7S_PIO_A_POWER_MODE_SELECT	(SUNXI_PIO_BASE + GPIO_POW_MODE_REG)
+#define A7S_PIO_A_POWER_MODE_CONTROL	(SUNXI_PIO_BASE + GPIO_POW_MS_CTL)
+#define A7S_PIO_A_POWER_MODE_VALUE	(SUNXI_PIO_BASE + GPIO_POW_MODE_VAL_REG)
+#define A7S_PIO_A_POWER_CONTROL		(SUNXI_PIO_BASE + 0x390)
+
+#define A7S_PIO_B_POWER_MODE_SELECT	(SUNXI_PIO_BASE + 0x40)
+#define A7S_PIO_B_POWER_MODE_VALUE	(SUNXI_PIO_BASE + 0x48)
+#define A7S_PIO_B_POWER_CONTROL		(SUNXI_PIO_BASE + 0x70)
+
 #define AXP8191_DEVICE_ADDR	400000
 #define AXP8191_RUNTIME_ADDR	0x36
 #define AXP8191_CHIP_ID		0x0e
@@ -35,7 +48,9 @@
 #define AXP8191_DCDC6_VOL	0x17
 #define AXP8191_DCDC7_VOL	0x18
 #define AXP8191_DCDC8_VOL	0x19
+#define AXP8191_LDO_CTRL2	0x21
 #define AXP8191_LDO_CTRL3	0x22
+#define AXP8191_CLDO5_VOL	0x33
 #define AXP8191_ELDO1_VOL	0x3a
 #define AXP8191_ELDO2_VOL	0x3b
 #define AXP8191_AP_RESET_CTRL	0x55
@@ -63,6 +78,8 @@ static const struct a7s_axp8191_rail a7s_dram_rails[] = {
 	  A7S_AXP8191_ELDO },
 	{ "eldo2", AXP8191_ELDO2_VOL, 0x3f, AXP8191_LDO_CTRL3, 7,
 	  A7S_AXP8191_ELDO },
+	{ "cldo5", AXP8191_CLDO5_VOL, 0x1f, AXP8191_LDO_CTRL2, 7,
+	  A7S_AXP8191_CLDO },
 };
 
 int pmic_bus_init(u32 device_addr, u32 runtime_addr);
@@ -297,6 +314,41 @@ static int a7s_axp8191_set_rail(const char *name, int set_vol, int onoff)
 					 onoff ? 1U << rail->enable_bit : 0);
 }
 
+static int a7s_axp8191_configure_emmc_io(void)
+{
+	u8 enable;
+	u8 selector;
+	u32 soc_version;
+
+	if (a7s_axp8191_set_rail("cldo5", 1800, 1)) {
+		printf("A7S PMU: set eMMC I/O cldo5 to 1800 mV failed\n");
+		return -1;
+	}
+	if (pmic_bus_read(AXP8191_RUNTIME_ADDR, AXP8191_CLDO5_VOL,
+			  &selector) ||
+	    pmic_bus_read(AXP8191_RUNTIME_ADDR, AXP8191_LDO_CTRL2,
+			  &enable) ||
+	    (selector & 0x1f) != 0x0d || !(enable & (1U << 7))) {
+		printf("A7S PMU: eMMC I/O cldo5 readback failed\n");
+		return -1;
+	}
+
+	/* Allow the PIO hardware voltage detector to settle after enabling CLDO5. */
+	mdelay(1);
+	soc_version = readl(A7S_SOC_VERSION_REG) & A7S_SOC_VERSION_MASK;
+	printf("[DEBUG-A7S-EMMC] SOC_VER=%u PIO_LAYOUT=%c A[SEL=%08x CTL=%08x VAL=%08x PWR=%08x] B[SEL=%08x VAL=%08x PWR=%08x]\n",
+	       soc_version, soc_version == A7S_SOC_VERSION_B ? 'B' : 'A',
+	       readl(A7S_PIO_A_POWER_MODE_SELECT),
+	       readl(A7S_PIO_A_POWER_MODE_CONTROL),
+	       readl(A7S_PIO_A_POWER_MODE_VALUE),
+	       readl(A7S_PIO_A_POWER_CONTROL),
+	       readl(A7S_PIO_B_POWER_MODE_SELECT),
+	       readl(A7S_PIO_B_POWER_MODE_VALUE),
+	       readl(A7S_PIO_B_POWER_CONTROL));
+	printf("A7S PMU: eMMC I/O cldo5 = 1800 mV\n");
+	return 0;
+}
+
 int sunxi_board_init(void)
 {
 	u32 value = readl(0x08020000);
@@ -304,6 +356,8 @@ int sunxi_board_init(void)
 	/* Preserve the SoC setup performed by the supplied FPGA board object. */
 	writel(value | 1U, 0x08020000);
 	if (a7s_axp8191_init())
+		return -1;
+	if (a7s_axp8191_configure_emmc_io())
 		return -1;
 
 	return a7s_axp8191_enable_sd_power();
@@ -346,6 +400,8 @@ int mmc_register(int sdc_no, void *mmc)
 
 	if (sdc_no == 0)
 		a7s_mmc0_config_pins();
+	else if (sdc_no == 2)
+		a7s_mmc2_install_clock(mmc);
 
 	return mmc_init(mmc);
 }

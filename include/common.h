@@ -38,6 +38,7 @@ void udelay(unsigned long);
 void mdelay(unsigned long);
 void sdelay(unsigned long loops);
 u32 timer_get_us(void);
+void a7s_mmc2_install_clock(void *mmc);
 u32 get_sys_ticks(void);
 
 void print_sys_tick(void);
@@ -178,6 +179,8 @@ void boot0_jump_kernel(u32 dtb_base, u32 kernel_addr);
 #if defined(CFG_SUNXI_MMC) || defined(CFG_SUNXI_SDMMC)
 int mmc_bread_ext(uint, uint, void *);
 int sunxi_mmc_init_ext(void);
+int sunxi_mmc_init(int sdc_no, unsigned int bus_width,
+		   const void *gpio_info, int offset);
 int sunxi_mmc_cpu_read(uint start, uint blkcnt, void *dst);
 #endif
 /* spinor*/
