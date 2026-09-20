@@ -28,7 +28,7 @@
  * SDC2 untouched when booting from SDC0.  Set to 1 to restore the preinit.
  */
 #ifndef A7S_EMMC_PREINIT
-#define A7S_EMMC_PREINIT 0
+#define A7S_EMMC_PREINIT 1
 #endif
 
 #ifndef CONFIG_SUNXI_FIP
