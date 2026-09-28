@@ -21,14 +21,15 @@
 #include <hw_config_a733.h>
 
 /*
- * Diagnostic switch (2026-09-17).  Default off: booting the kernel with SDC2
- * already initialised by boot0 broke the kernel's high-speed eMMC bring-up
- * (HS200 failed at cmd 13 RD RE RCE at 52 MHz).  With the preinit skipped the
- * kernel enumerates the card as HS400; the vendor boot chain likewise leaves
- * SDC2 untouched when booting from SDC0.  Set to 1 to restore the preinit.
+ * Diagnostic switch.  Default off: the vendor boot chain leaves SDC2
+ * untouched when booting from SDC0.  With the preinit enabled (verified
+ * 2026-09-20) the card does come up as 8-bit HSSDR52 (the blob even runs
+ * with SFC=0x7), but the kernel's HS200 bring-up still fails identically
+ * at 52 MHz (cmd 13 RE RCE), so a warm 8-bit card alone is not enough.
+ * Set to 1 to reproduce that comparison.
  */
 #ifndef A7S_EMMC_PREINIT
-#define A7S_EMMC_PREINIT 1
+#define A7S_EMMC_PREINIT 0
 #endif
 
 #ifndef CONFIG_SUNXI_FIP
