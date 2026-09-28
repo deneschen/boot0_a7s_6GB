@@ -38,6 +38,19 @@
 #define A7S_PIO_B_POWER_MODE_VALUE	(SUNXI_PIO_BASE + 0x48)
 #define A7S_PIO_B_POWER_CONTROL		(SUNXI_PIO_BASE + 0x70)
 
+/*
+ * GPIO_POW_MOD_SEL bit fields (manual 18.14.6.1): two bits per port,
+ * 00/10 = 3.3 V manual, 01 = adaptive, 11 = 1.8 V manual.  Reset default is
+ * 10 (3.3 V) for every port.  Port C carries the 1.8 V eMMC bus and must not
+ * stay in the 3.3 V withstand mode, otherwise high speed modes fail with
+ * response CRC errors while everything below ~50 MHz still works.  The vendor
+ * U-Boot puts every group it configures into adaptive mode; nothing later
+ * does (the kernel pinctrl runs in auto_hard mode and skips these registers).
+ */
+#define A7S_PIO_PC_WITHSTAND_SHIFT	4
+#define A7S_PIO_PC_WITHSTAND_MASK	(0x3U << A7S_PIO_PC_WITHSTAND_SHIFT)
+#define A7S_PIO_PC_WITHSTAND_AUTO	(0x1U << A7S_PIO_PC_WITHSTAND_SHIFT)
+
 #define AXP8191_DEVICE_ADDR	400000
 #define AXP8191_RUNTIME_ADDR	0x36
 #define AXP8191_CHIP_ID		0x0e
@@ -314,6 +327,19 @@ static int a7s_axp8191_set_rail(const char *name, int set_vol, int onoff)
 					 onoff ? 1U << rail->enable_bit : 0);
 }
 
+static void a7s_pio_emmc_withstand_auto(void)
+{
+	u32 before = readl(A7S_PIO_B_POWER_MODE_SELECT);
+	u32 after = (before & ~A7S_PIO_PC_WITHSTAND_MASK) |
+		    A7S_PIO_PC_WITHSTAND_AUTO;
+
+	writel(after, A7S_PIO_B_POWER_MODE_SELECT);
+	after = readl(A7S_PIO_B_POWER_MODE_SELECT);
+	printf("A7S PIO: PC withstand mode %08x -> %08x%s\n", before, after,
+	       (after & A7S_PIO_PC_WITHSTAND_MASK) == A7S_PIO_PC_WITHSTAND_AUTO ?
+		       "" : " (readback failed)");
+}
+
 static int a7s_axp8191_configure_emmc_io(void)
 {
 	u8 enable;
@@ -335,6 +361,7 @@ static int a7s_axp8191_configure_emmc_io(void)
 
 	/* Allow the PIO hardware voltage detector to settle after enabling CLDO5. */
 	mdelay(1);
+	a7s_pio_emmc_withstand_auto();
 	soc_version = readl(A7S_SOC_VERSION_REG) & A7S_SOC_VERSION_MASK;
 	printf("[DEBUG-A7S-EMMC] SOC_VER=%u PIO_LAYOUT=%c A[SEL=%08x CTL=%08x VAL=%08x PWR=%08x] B[SEL=%08x VAL=%08x PWR=%08x]\n",
 	       soc_version, soc_version == A7S_SOC_VERSION_B ? 'B' : 'A',
