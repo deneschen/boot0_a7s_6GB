@@ -32,6 +32,13 @@
 #define A7S_EMMC_PREINIT 0
 #endif
 
+/*
+ * Optional read-only clock tree dump (diagnostics only, quiet by default).
+ */
+#ifndef A7S_CLOCK_DUMP
+#define A7S_CLOCK_DUMP 0
+#endif
+
 #ifndef CONFIG_SUNXI_FIP
 #error "This A733 boot0 build requires the FIP-only boot path"
 #endif
@@ -150,7 +157,9 @@ void main(void)
 			dram_size = BT0_head.dram_size;
 		printf("dram size =%d\n", dram_size);
 	}
+#if A7S_CLOCK_DUMP
 	a7s_clock_dump();
+#endif
 #ifdef CFG_SUNXI_STANDBY_WORKAROUND
 	handler_super_standby();
 #endif

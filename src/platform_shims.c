@@ -344,7 +344,6 @@ static int a7s_axp8191_configure_emmc_io(void)
 {
 	u8 enable;
 	u8 selector;
-	u32 soc_version;
 
 	if (a7s_axp8191_set_rail("cldo5", 1800, 1)) {
 		printf("A7S PMU: set eMMC I/O cldo5 to 1800 mV failed\n");
@@ -362,16 +361,6 @@ static int a7s_axp8191_configure_emmc_io(void)
 	/* Allow the PIO hardware voltage detector to settle after enabling CLDO5. */
 	mdelay(1);
 	a7s_pio_emmc_withstand_auto();
-	soc_version = readl(A7S_SOC_VERSION_REG) & A7S_SOC_VERSION_MASK;
-	printf("[DEBUG-A7S-EMMC] SOC_VER=%u PIO_LAYOUT=%c A[SEL=%08x CTL=%08x VAL=%08x PWR=%08x] B[SEL=%08x VAL=%08x PWR=%08x]\n",
-	       soc_version, soc_version == A7S_SOC_VERSION_B ? 'B' : 'A',
-	       readl(A7S_PIO_A_POWER_MODE_SELECT),
-	       readl(A7S_PIO_A_POWER_MODE_CONTROL),
-	       readl(A7S_PIO_A_POWER_MODE_VALUE),
-	       readl(A7S_PIO_A_POWER_CONTROL),
-	       readl(A7S_PIO_B_POWER_MODE_SELECT),
-	       readl(A7S_PIO_B_POWER_MODE_VALUE),
-	       readl(A7S_PIO_B_POWER_CONTROL));
 	printf("A7S PMU: eMMC I/O cldo5 = 1800 mV\n");
 	return 0;
 }
