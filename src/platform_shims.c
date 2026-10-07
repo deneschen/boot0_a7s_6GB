@@ -58,6 +58,8 @@
 #define AXP8191_DCDC_CTRL1	0x10
 #define AXP8191_DCDC_CTRL2	0x11
 #define AXP8191_DC1SW2_ENABLE	(1U << 4)
+#define AXP8191_DCDC2_VOL	0x13
+#define AXP8191_DCDC2_840MV	0x22
 #define AXP8191_DCDC6_VOL	0x17
 #define AXP8191_DCDC7_VOL	0x18
 #define AXP8191_DCDC8_VOL	0x19
@@ -365,6 +367,31 @@ static int a7s_axp8191_configure_emmc_io(void)
 	return 0;
 }
 
+/*
+ * Match the vendor boot-chain NPU rail.  The kernel leaves npu-setvol disabled
+ * and relies on boot0 to set DCDC2 (0x22 = 840 mV, 10 mV/LSB).
+ */
+static int a7s_axp8191_set_npu_rail(void)
+{
+	u8 value;
+
+	if (a7s_axp8191_update_bits(AXP8191_DCDC_CTRL1, 1U << 1, 1U << 1)) {
+		printf("A7S PMU: enable NPU rail dcdc2 failed\n");
+		return -1;
+	}
+	if (pmic_bus_write(AXP8191_RUNTIME_ADDR, AXP8191_DCDC2_VOL,
+			   AXP8191_DCDC2_840MV)) {
+		printf("A7S PMU: set NPU rail dcdc2 failed\n");
+		return -1;
+	}
+	if (pmic_bus_read(AXP8191_RUNTIME_ADDR, AXP8191_DCDC2_VOL, &value) ||
+	    (value & 0x7f) != AXP8191_DCDC2_840MV) {
+		printf("A7S PMU: NPU rail dcdc2 readback failed\n");
+		return -1;
+	}
+	return 0;
+}
+
 int sunxi_board_init(void)
 {
 	u32 value = readl(0x08020000);
@@ -374,6 +401,8 @@ int sunxi_board_init(void)
 	if (a7s_axp8191_init())
 		return -1;
 	if (a7s_axp8191_configure_emmc_io())
+		return -1;
+	if (a7s_axp8191_set_npu_rail())
 		return -1;
 
 	return a7s_axp8191_enable_sd_power();
