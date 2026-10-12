@@ -107,9 +107,35 @@ const boot0_file_head_t  BT0_head = {
 			{6, 0, 2, 1, 1, 0xff, {0} },/* PF0: SDC0 D1 */
 			{6, 5, 2, 1, 1, 0xff, {0} },/* PF5: SDC0 D2 */
 			{6, 4, 2, 1, 1, 0xff, {0} },/* PF4: SDC0 D3 */
+			/*
+			 * The vendor MMC blob programs entries [16..27] when it
+			 * initializes card 2, i.e. the on-board eMMC (SDC2) after
+			 * the BROM booted from it.  Same table the official Radxa
+			 * boot0 head carries.
+			 */
+			{0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0},
+			{3, 5,  3, 1, 1, 0xff, {0} },/* PC5:  SDC2 CLK */
+			{3, 6,  3, 1, 1, 0xff, {0} },/* PC6:  SDC2 CMD */
+			{3, 10, 3, 1, 1, 0xff, {0} },/* PC10: SDC2 D0 */
+			{3, 13, 3, 1, 1, 0xff, {0} },/* PC13: SDC2 D1 */
+			{3, 15, 3, 1, 1, 0xff, {0} },/* PC15: SDC2 D2 */
+			{3, 8,  3, 1, 1, 0xff, {0} },/* PC8:  SDC2 D3 */
+			{3, 9,  3, 1, 1, 0xff, {0} },/* PC9:  SDC2 D4 */
+			{3, 11, 3, 1, 1, 0xff, {0} },/* PC11: SDC2 D5 */
+			{3, 14, 3, 1, 1, 0xff, {0} },/* PC14: SDC2 D6 */
+			{3, 16, 3, 1, 1, 0xff, {0} },/* PC16: SDC2 D7 */
+			{3, 1,  3, 1, 1, 0xff, {0} },/* PC1:  SDC2 RST_N */
+			{3, 0,  3, 2, 1, 0xff, {0} },/* PC0:  SDC2 DS */
 		},
 		/*char  storage_data[512 - sizeof(normal_gpio_cfg) * 32];*/
-		{0}
+		{
+			/*
+			 * Per-card bus width read by the vendor blob as
+			 * u32 storage_data[10 + card_no] (0 lets it pick 4).
+			 */
+			[40] = 4,	/* MMC0 (SDC0): 4-bit */
+			[48] = 8,	/* MMC2 (SDC2/eMMC): 8-bit */
+		}
 	},
 
 	{CI_INFO},
