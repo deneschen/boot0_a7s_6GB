@@ -105,6 +105,64 @@ static int a7s_axp8191_ready;
 
 extern void *mmc_devices[];
 int mmc_init(void *mmc);
+int mmc_read_blocks(void *mmc, void *dst, u32 start, u32 blkcnt);
+
+/*
+ * Vendor blob scratch area (one sector).  It holds the optional "acmm"
+ * eMMC timing region read from LBA 24504, and the blob's mmc_init() takes
+ * the card media type from byte offset 0x68.  Our images never write that
+ * region, so the media type is always 0 and the blob prints
+ * "Wrong media type 0x0" before probing.  The SMHC number fixes the media:
+ * SDC0 is the microSD slot and SDC2 is the soldered eMMC.
+ */
+extern unsigned char mmc_arg_addr[];
+
+#define A7S_MMC_INFO_SECTOR		24504
+#define A7S_MMC_INFO_MAGIC		0x6d6d6361U	/* "acmm" */
+#define A7S_MMC_MEDIA_OFFSET		0x68
+#define A7S_MMC_MEDIA_SD		0x08000001U
+#define A7S_MMC_MEDIA_MMC		0x08000000U
+
+static void a7s_mmc_set_media(u32 media)
+{
+	unsigned char *p = mmc_arg_addr + A7S_MMC_MEDIA_OFFSET;
+
+	p[0] = media & 0xff;
+	p[1] = (media >> 8) & 0xff;
+	p[2] = (media >> 16) & 0xff;
+	p[3] = (media >> 24) & 0xff;
+}
+
+/*
+ * Replaces the blob's mmc_read_info() (first definition wins at link time).
+ * The vendor version retries four times and prints "region magic is not
+ * right" / "RMCA FAIL!" / "mmc read timing info fail" whenever the optional
+ * region is absent, which is the normal state on this board.  Read it once,
+ * keep a valid region for the consumers (they check the magic themselves),
+ * and invalidate a region with a bad checksum.  Absence is not an error.
+ */
+int mmc_read_info(void *mmc, void *buf, u32 count)
+{
+	unsigned char *p = buf;
+	u32 *w = buf;
+	u32 len, stored, sum = 0, i;
+
+	if (mmc_read_blocks(mmc, buf, A7S_MMC_INFO_SECTOR, count) < 0)
+		return 0;
+	if (w[5] != A7S_MMC_INFO_MAGIC)
+		return 0;
+
+	len = w[7];
+	stored = w[6];
+	w[6] = 0;
+	if (len <= count * 512)
+		for (i = 0; i < len; i++)
+			sum += p[i];
+	if (len > count * 512 || sum != stored)
+		w[5] = 0;
+
+	return 0;
+}
 
 static void a7s_gpio_registers(unsigned int port, unsigned int pin,
 		unsigned long *cfg, unsigned long *pull, unsigned long *drv,
@@ -448,5 +506,15 @@ int mmc_register(int sdc_no, void *mmc)
 	else if (sdc_no == 2)
 		a7s_mmc2_install_clock(mmc);
 
+	if (sdc_no != 0) {
+		a7s_mmc_set_media(A7S_MMC_MEDIA_MMC);
+		return mmc_init(mmc);
+	}
+
+	/* Keep the vendor SD -> MMC fallback order for the removable slot. */
+	a7s_mmc_set_media(A7S_MMC_MEDIA_SD);
+	if (mmc_init(mmc) >= 0)
+		return 0;
+	a7s_mmc_set_media(A7S_MMC_MEDIA_MMC);
 	return mmc_init(mmc);
 }
