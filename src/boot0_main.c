@@ -19,6 +19,7 @@
 #include <sunxi_fip.h>
 #include <sunxi_flashmap.h>
 #include <hw_config_a733.h>
+#include <dram_cache_a733.h>
 
 /*
  * Diagnostic switch.  Default off: the vendor boot chain leaves SDC2
@@ -149,6 +150,7 @@ void main(void)
 #else
 	dram_size = init_DRAM(0, (void *)sunxi_bootparam_get_dram_buf());
 #endif
+	a7s_dram_cache_finish(dram_size);
 	if (!dram_size) {
 		printf("init dram fail\n");
 		goto _BOOT_ERROR;

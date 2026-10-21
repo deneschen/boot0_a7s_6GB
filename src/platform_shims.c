@@ -7,6 +7,9 @@
 #include <common.h>
 #include <arch/gpio.h>
 #include <axp8191_voltage.h>
+#include <boot_param.h>
+#include <dram_cache_a733.h>
+#include <private_boot0.h>
 
 #define A7S_MAIN_PIO_BANK_SIZE	0x80
 #define A7S_MAIN_PIO_CFG_BASE	0x80
@@ -469,6 +472,185 @@ int sunxi_board_init(void)
 int set_ddr_voltage_ext(char *name, int set_vol, int onoff)
 {
 	return a7s_axp8191_set_rail(name, set_vol, onoff);
+}
+
+/*
+ * Replace the blob's weak bootparam hooks.  Its get_dram_buf() returns
+ * BT0_head.dram_para, which has only 32 words, but init_DRAM() stores the
+ * 2D training result in words 32-95 and overwrote the UART, JTAG and SDC0
+ * storage GPIO entries that follow it in the header.
+ */
+static boot_dram_info_t a7s_dram_info;
+
+boot_dram_info_t *sunxi_bootparam_get_dram_buf(void)
+{
+	return &a7s_dram_info;
+}
+
+/*
+ * DRAM training cache (see dram_cache_a733.h).  Every boot that may read the
+ * cache runs under the R_WDOG watchdog with ATTEMPT recorded in RTC GPR5.
+ * A hang therefore resets the board, and the next boot sees ATTEMPT, skips
+ * the cache read entirely and trains fully.  The cache can cost one reset,
+ * never a dead board.
+ */
+#define A7S_DRAM_GPR_BASE	(SUNXI_RTC_BASE + 0x100)
+#define A7S_DRAM_STATE_REG	(A7S_DRAM_GPR_BASE + A7S_DRAM_GPR_STATE * 4)
+#define A7S_SID_CHIPID		(SUNXI_SID_BASE + 0x200)
+#define A7S_R_WDOG_BASE		0x07021000U
+#define A7S_WDOG_SRST		(A7S_R_WDOG_BASE + 0x08)
+#define A7S_WDOG_CFG		(A7S_R_WDOG_BASE + 0x10)
+#define A7S_WDOG_MODE		(A7S_R_WDOG_BASE + 0x14)
+#define A7S_WDOG_OCFG		(A7S_R_WDOG_BASE + 0x18)
+#define A7S_WDOG_KEY		(0x16aaU << 16)
+/*
+ * A full training takes 4.5 s on this board, so 16 s separates a slow but
+ * working boot from a hang.  It is only ever paid once, because a boot that
+ * sees ATTEMPT does not arm the watchdog again.
+ */
+#define A7S_WDOG_INTERVAL_16S	(0xBU << 4)
+
+int get_card_num(void);
+
+static struct a7s_dram_cache_record a7s_dram_cache_slots[A7S_DRAM_CACHE_SLOTS];
+static u32 a7s_dram_cache_card;
+static u32 a7s_dram_cache_base_crc;
+static enum a7s_dram_cache_state a7s_dram_cache_state;
+
+static void a7s_dram_cache_report(enum a7s_dram_cache_state state)
+{
+	writel(A7S_DRAM_STATE_MAGIC | (a7s_dram_cache_card & 0xff) << 8 | state,
+	       A7S_DRAM_STATE_REG);
+}
+
+static void a7s_wdog_arm(void)
+{
+	/* Same register sequence and values as BL31's sunxi_system_reset(). */
+	writel(A7S_WDOG_KEY | 0x3f, A7S_WDOG_OCFG);
+	writel(A7S_WDOG_KEY | 1, A7S_WDOG_CFG);
+	writel(A7S_WDOG_KEY, A7S_WDOG_MODE);
+	writel(A7S_WDOG_KEY | A7S_WDOG_INTERVAL_16S | 1, A7S_WDOG_MODE);
+}
+
+static void a7s_wdog_disarm(void)
+{
+	writel(A7S_WDOG_KEY, A7S_WDOG_MODE);
+}
+
+/*
+ * Read the record one sector at a time.  Measured on this board: a two-sector
+ * read (CMD18) issued before init_DRAM() never returns, while single-sector
+ * reads (CMD17) at the same point return the data.  The same multi-sector
+ * call works once DRAM is up, which is how the FIP below is loaded.
+ */
+static int a7s_dram_cache_read(void)
+{
+	unsigned int index;
+
+	for (index = 0; index < A7S_DRAM_CACHE_SLOTS; index++)
+		if (mmc_bread_ext(A7S_DRAM_CACHE_LBA + index, 1,
+				  &a7s_dram_cache_slots[index]) != 0)
+			return -1;
+	return 0;
+}
+
+static enum a7s_dram_cache_state a7s_dram_cache_load(u32 *dram_para,
+						     u32 chipid_crc)
+{
+	const struct a7s_dram_cache_record *record;
+	u32 previous = readl(A7S_DRAM_STATE_REG);
+	int slot;
+
+	if (previous == (A7S_DRAM_STATE_MAGIC |
+			 (a7s_dram_cache_card & 0xff) << 8 |
+			 A7S_DRAM_CACHE_ATTEMPT)) {
+		/*
+		 * The previous boot stopped inside the window below.  Train
+		 * fully without touching the cache, and tell Linux so that it
+		 * counts the failure and eventually disables the cache.
+		 */
+		printf("A7S DRAM: last cached boot did not finish\n");
+		a7s_dram_cache_report(A7S_DRAM_CACHE_FALLBACK);
+		return A7S_DRAM_CACHE_FALLBACK;
+	}
+
+	a7s_dram_cache_report(A7S_DRAM_CACHE_ATTEMPT);
+	a7s_wdog_arm();
+
+	/* The MMC driver reads by CPU into SRAM, so it works before DRAM. */
+	if (sunxi_mmc_init_ext() != 0 || a7s_dram_cache_read() != 0)
+		return A7S_DRAM_CACHE_MISS;
+
+	slot = a7s_dram_cache_newest(a7s_dram_cache_slots,
+				     A7S_DRAM_CACHE_SLOTS);
+	if (slot < 0)
+		return A7S_DRAM_CACHE_MISS;
+	record = &a7s_dram_cache_slots[slot];
+
+	switch (a7s_dram_cache_check(record, chipid_crc,
+				     a7s_dram_cache_base_crc)) {
+	case A7S_DRAM_CACHE_HIT:
+		break;
+	case A7S_DRAM_CACHE_DISABLED:
+		return A7S_DRAM_CACHE_DISABLED;
+	default:
+		return A7S_DRAM_CACHE_MISS;
+	}
+
+	a7s_dram_cache_apply(dram_para, record);
+	printf("A7S DRAM: cached training slot %d seq %u\n", slot,
+	       record->sequence);
+	return A7S_DRAM_CACHE_HIT;
+}
+
+int sunxi_bootparam_load(void)
+{
+	u32 chipid[4];
+	u32 chipid_crc;
+	unsigned int index;
+
+	memcpy(a7s_dram_info.dram_para, BT0_head.prvt_head.dram_para,
+	       sizeof(BT0_head.prvt_head.dram_para));
+
+	for (index = 0; index < 4; index++)
+		chipid[index] = readl(A7S_SID_CHIPID + index * 4);
+	chipid_crc = a7s_dram_cache_crc32(chipid, sizeof(chipid));
+	a7s_dram_cache_base_crc =
+		a7s_dram_cache_crc32(BT0_head.prvt_head.dram_para,
+				     sizeof(BT0_head.prvt_head.dram_para));
+
+	a7s_dram_cache_card = get_card_num();
+
+	/* Publish what this boot compares a record against. */
+	writel(chipid_crc,
+	       A7S_DRAM_GPR_BASE + A7S_DRAM_GPR_CHIPID_CRC * 4);
+	writel(a7s_dram_cache_base_crc,
+	       A7S_DRAM_GPR_BASE + A7S_DRAM_GPR_BASE_CRC * 4);
+
+	a7s_dram_cache_state =
+		a7s_dram_cache_load(a7s_dram_info.dram_para, chipid_crc);
+	return 0;
+}
+
+/* Called right after init_DRAM(); dram_size is 0 when it failed. */
+void a7s_dram_cache_finish(int dram_size)
+{
+	if (a7s_dram_cache_state == A7S_DRAM_CACHE_FALLBACK)
+		return;			/* the watchdog was not armed */
+
+	if (!dram_size) {
+		/*
+		 * Keep ATTEMPT: the reset brings boot0 back on the FALLBACK
+		 * path, which trains fully.
+		 */
+		printf("A7S DRAM: DRAM init failed, resetting\n");
+		writel(A7S_WDOG_KEY | 1, A7S_WDOG_SRST);
+		for (;;)
+			;
+	}
+
+	a7s_wdog_disarm();
+	a7s_dram_cache_report(a7s_dram_cache_state);
 }
 
 void sunxi_smc_en_with_glitch_workaround(void)

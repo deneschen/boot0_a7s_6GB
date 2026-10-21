@@ -99,6 +99,7 @@ OBJS := $(BUILD)/boot0_entry.o \
         $(BUILD)/libfdt_fdt_ro.o \
         $(BUILD)/libfdt_fdt_wip.o \
         $(BUILD)/sunxi_fip.o \
+        $(BUILD)/dram_cache_a733.o \
         $(BUILD)/platform_shims.o
 
 OBJS += $(BUILD)/mmc_a733.o
@@ -137,6 +138,7 @@ CLOCK_TEST := $(BUILD)/test_clock_a733
 A7S_HW_CONFIG_DTB := $(BUILD)/a7s-ar100s-hw-config.dtb
 HW_CONFIG_TEST := $(BUILD)/test_hw_config_a733
 AXP8191_VOLTAGE_TEST := $(BUILD)/test_axp8191_voltage
+DRAM_CACHE_TEST := $(BUILD)/test_dram_cache_a733
 
 .PHONY: all clean test test-sanitize test-fiptool verify scp scp-clean \
 	uboot hw-config verify-all
@@ -168,12 +170,13 @@ scp-clean:
 hw-config: $(A7S_HW_CONFIG_DTB)
 
 test: $(BUILD)/test_sunxi_fip $(CLOCK_TEST) $(HW_CONFIG_TEST) \
-		$(AXP8191_VOLTAGE_TEST) \
+		$(AXP8191_VOLTAGE_TEST) $(DRAM_CACHE_TEST) \
 		$(A7S_HW_CONFIG_DTB)
 	$(BUILD)/test_sunxi_fip
 	$(CLOCK_TEST)
 	$(HW_CONFIG_TEST) $(A7S_HW_CONFIG_DTB)
 	$(AXP8191_VOLTAGE_TEST)
+	$(DRAM_CACHE_TEST)
 	python3 $(TOP)/tests/test_mmc_a733.py
 
 test-sanitize: $(SANITIZED_FIP_TEST)
@@ -231,6 +234,13 @@ $(AXP8191_VOLTAGE_TEST): $(TOP)/tests/test_axp8191_voltage.c \
 	$(HOSTCC) -std=c11 -Wall -Wextra -Werror -I$(TOP)/include \
 		-o $@ $(TOP)/tests/test_axp8191_voltage.c \
 		$(TOP)/src/axp8191_voltage.c
+
+$(DRAM_CACHE_TEST): $(TOP)/tests/test_dram_cache_a733.c \
+				   $(TOP)/src/dram_cache_a733.c \
+				   $(TOP)/include/dram_cache_a733.h | $(BUILD)
+	$(HOSTCC) -std=c11 -Wall -Wextra -Werror -I$(TOP)/include \
+		-o $@ $(TOP)/tests/test_dram_cache_a733.c \
+		$(TOP)/src/dram_cache_a733.c
 
 $(FIPTOOL_TEST_SCP): $(FIPTOOL_TEST_PAYLOAD_GEN) | $(BUILD)
 	python3 $< scp $@
@@ -323,8 +333,13 @@ $(BUILD)/axp8191_voltage.o: $(TOP)/src/axp8191_voltage.c \
 				  $(TOP)/include/axp8191_voltage.h | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+$(BUILD)/dram_cache_a733.o: $(TOP)/src/dram_cache_a733.c \
+				  $(TOP)/include/dram_cache_a733.h | $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 $(BUILD)/platform_shims.o: $(TOP)/src/platform_shims.c \
-				  $(TOP)/include/axp8191_voltage.h | $(BUILD)
+				  $(TOP)/include/axp8191_voltage.h \
+				  $(TOP)/include/dram_cache_a733.h | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD)/mmc_a733.o: $(TOP)/src/mmc_a733.c | $(BUILD)
